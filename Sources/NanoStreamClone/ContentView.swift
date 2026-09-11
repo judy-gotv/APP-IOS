@@ -197,3 +197,8 @@ extension Color {
     static let cardInner = Color(red: 0.055, green: 0.07, blue: 0.08)
     static let neon = Color(red: 0.2, green: 1.0, blue: 0.12)
 }
+
+// Allows the concise `.neon` style spelling in SwiftUI modifiers.
+extension ShapeStyle where Self == Color {
+    static var neon: Color { Color.neon }
+}
