@@ -22,7 +22,8 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             VStack { Spacer(); BottomBar(tab: $tab) }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(state.colorScheme)
+        .tint(state.accent)
         .sheet(isPresented: $showAddPlaylist) { PlaylistFormView() }
     }
 }
@@ -36,6 +37,7 @@ enum AppTab: String, CaseIterable, Identifiable {
 }
 
 struct BottomBar: View {
+    @EnvironmentObject private var state: AppState
     @Binding var tab: AppTab
     var body: some View {
         HStack(spacing: 0) {
@@ -43,7 +45,7 @@ struct BottomBar: View {
                 Button { withAnimation(.easeOut(duration: 0.18)) { tab = item } } label: {
                     VStack(spacing: 5) {
                         Image(systemName: item.icon).font(.system(size: 25, weight: .regular))
-                        Text(item.rawValue).font(.system(size: 11, weight: .medium))
+                        Text(state.localized(item.rawValue)).font(.system(size: 11, weight: .medium))
                         Circle().fill(tab == item ? Color.neon : .clear).frame(width: 4, height: 4)
                     }
                     .foregroundStyle(tab == item ? Color.neon : .white.opacity(0.58))
@@ -84,11 +86,14 @@ struct HomeView: View {
                     Spacer(minLength: 0)
                     Image(systemName: "square.grid.2x2").foregroundStyle(.neon).frame(width: 46, height: 40).background(Color.panel, in: RoundedRectangle(cornerRadius: 20))
                 }.padding(.horizontal, 22).padding(.top, 16)
-                RecentRail().padding(.top, 23)
-                Text("Could not refresh 世界杯🏆: The server returned HTTP 401.").font(.system(size: 14)).foregroundStyle(.neon).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 8)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    ForEach(state.channels(for: selectedQuality)) { channel in ChannelCard(channel: channel) { state.play(channel); selectedDetail = channel } }
-                }.padding(.horizontal, 22).padding(.top, 17).padding(.bottom, 110)
+                if state.channels.isEmpty {
+                    EmptyHomeState()
+                } else {
+                    RecentRail().padding(.top, 23)
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                        ForEach(state.channels(for: selectedQuality)) { channel in ChannelCard(channel: channel) { state.play(channel); selectedDetail = channel } }
+                    }.padding(.horizontal, 22).padding(.top, 17).padding(.bottom, 110)
+                }
             }
         }
         .fullScreenCover(item: $selectedDetail) { channel in ChannelDetailView(channel: channel) }
@@ -97,18 +102,18 @@ struct HomeView: View {
 
 struct RecentRail: View {
     @EnvironmentObject private var state: AppState
-    private let fallback = ["NOW Sports 616", "NOW Sports 616", "TSN 4K CA", "FUSSBALL"]
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text("最近播放").font(.system(size: 20, weight: .bold)); Spacer(); Image(systemName: "clock.fill").foregroundStyle(.neon) }.padding(.horizontal, 22)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
-                    ForEach(Array(fallback.enumerated()), id: \.offset) { item in
+                    ForEach(state.recent.compactMap(state.channel(for:))) { channel in
                         VStack(spacing: 7) {
-                            ZStack { RoundedRectangle(cornerRadius: 12).fill(Color.cardInner); Text(item.element).font(.system(size: 11, weight: .bold)).multilineTextAlignment(.center).padding(7) }.frame(width: 112, height: 90)
-                            Text(item.element).font(.caption).lineLimit(1).frame(width: 112, alignment: .leading)
+                            ZStack { RoundedRectangle(cornerRadius: 12).fill(Color.cardInner); Text(channel.name).font(.system(size: 11, weight: .bold)).multilineTextAlignment(.center).padding(7) }.frame(width: 112, height: 90)
+                            Text(channel.name).font(.caption).lineLimit(1).frame(width: 112, alignment: .leading)
                         }.padding(9).background(Color.card, in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.25), lineWidth: 1))
                     }
+                    if state.recent.isEmpty { Text("暂无播放记录").foregroundStyle(.white.opacity(0.45)).padding(.horizontal, 22) }
                 }.padding(.horizontal, 22)
             }
         }
@@ -153,7 +158,7 @@ struct ChannelDetailView: View {
     var body: some View {
         ZStack { Color.appBackground.ignoresSafeArea(); ScrollView(showsIndicators: false) { VStack(spacing: 14) {
             HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(channel.name).font(.headline); Spacer(); Button { showInfo = true } label: { Image(systemName: "info.circle") }.buttonStyle(.plain); Button { state.toggleFavorite(channel) } label: { Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star") }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.top, 12)
-            ZStack(alignment: .bottomLeading) { if let url = channel.streamURL { KSVideoPlayerView(url: url, options: KSOptions(), title: channel.name) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
+            ZStack(alignment: .bottomLeading) { if let url = channel.streamURL { PlayerSurface(url: url, title: channel.name, engine: state.preferredPlayer, bufferMilliseconds: state.networkBufferMilliseconds) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
             Picker("", selection: $mode) { Text("订阅").tag("订阅"); Text("频道").tag("频道"); Text("节目").tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18)
             HStack { Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.5)); TextField("搜索频道...", text: $search); Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.neon) }.padding(14).background(Color.panel, in: RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 18)
             ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in Button { state.play(item) } label: { HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text("IPTV Channel").font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == channel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == channel.id ? .neon : .white.opacity(0.4)) }.padding(10).background(item.id == channel.id ? Color.neon.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }.buttonStyle(.plain) }
@@ -161,6 +166,36 @@ struct ChannelDetailView: View {
         } } }
         .onAppear { state.play(channel) }
         .alert("编码信息", isPresented: $showInfo) { Button("关闭", role: .cancel) {} } message: { Text("Video\nResolution 1920 × 1080\nFrame Rate 50 fps\nCodec H.264\nAudio AAC") }
+    }
+}
+
+struct PlayerSurface: View {
+    let url: URL
+    let title: String
+    let engine: PreferredPlayer
+    let bufferMilliseconds: Double
+
+    var body: some View {
+        switch engine {
+        case .ksPlayer:
+            KSVideoPlayerView(url: url, options: ksOptions, title: title)
+        case .avPlayer, .auto:
+            VideoPlayer(player: avPlayer)
+        }
+    }
+
+    private var ksOptions: KSOptions {
+        let options = KSOptions()
+        options.preferredForwardBufferDuration = bufferMilliseconds / 1000
+        return options
+    }
+
+    private var avPlayer: AVPlayer {
+        let item = AVPlayerItem(url: url)
+        item.preferredForwardBufferDuration = bufferMilliseconds / 1000
+        let player = AVPlayer(playerItem: item)
+        player.play()
+        return player
     }
 }
 
@@ -185,16 +220,29 @@ struct FavoritesView: View {
     }
 }
 
+struct EmptyHomeState: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "rectangle.stack.badge.plus").font(.system(size: 44, weight: .thin)).foregroundStyle(.white.opacity(0.45))
+            Text("暂无频道").font(.title3.bold())
+            Text("请先在“播放列表”中添加 M3U 或 Xtream 来源。").font(.subheadline).foregroundStyle(.white.opacity(0.55)).multilineTextAlignment(.center)
+        }.padding(.top, 72).padding(.horizontal, 28)
+    }
+}
+
 struct PlaylistsView: View {
     @EnvironmentObject private var state: AppState
     @Binding var showAdd: Bool
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                HStack { Button { } label: { Image(systemName: "arrow.clockwise").font(.title2).foregroundStyle(.neon) }.buttonStyle(.plain); Spacer(); Button { showAdd = true } label: { Image(systemName: "plus").font(.title2).foregroundStyle(.neon) }.buttonStyle(.plain) }.padding(.horizontal, 28).padding(.top, 54)
+                HStack { Button { state.refreshPlaylists() } label: { Image(systemName: "arrow.clockwise").font(.title2).foregroundStyle(state.accent) }.buttonStyle(.plain); Spacer(); Button { showAdd = true } label: { Image(systemName: "plus").font(.title2).foregroundStyle(state.accent) }.buttonStyle(.plain) }.padding(.horizontal, 28).padding(.top, 54)
                 Text("播放列表").font(.system(size: 31, weight: .bold)).padding(.horizontal, 28).padding(.bottom, 16)
-                let items = state.playlists.isEmpty ? [Playlist(name: "K-20 IPTV", kind: .m3u, endpoint: "", channelCount: 1, lastRefresh: nil), Playlist(name: "世界杯🏆", kind: .m3u, endpoint: "", channelCount: 848, lastRefresh: nil)] : state.playlists
-                ForEach(items) { playlist in PlaylistRow(playlist: playlist) { state.removePlaylist(playlist) } }
+                if state.playlists.isEmpty {
+                    Text("暂无播放列表").foregroundStyle(.white.opacity(0.5)).padding(.horizontal, 28)
+                } else {
+                    ForEach(state.playlists) { playlist in PlaylistRow(playlist: playlist) { state.removePlaylist(playlist) } }
+                }
             }.padding(.bottom, 120)
         }
     }

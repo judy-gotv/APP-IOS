@@ -13,22 +13,32 @@ final class AppState: ObservableObject {
     @Published var searchText = ""
     @Published var isLoadingPlaylist = false
     @Published var playlistError: String?
+    @Published var language: String
+    @Published var themeMode: String
+    @Published var colorTheme: String
+    @Published var preferredPlayer: PreferredPlayer
+    @Published var networkBufferMilliseconds: Double
     let player = StreamPlayer()
 
-    private let storageKey = "nanostream.state.v2"
+    private let storageKey = "nanostream.state.v3"
 
     init() {
         if let saved = Self.restore(key: storageKey) {
-            channels = saved.channels.isEmpty ? Channel.samples : saved.channels
+            channels = saved.channels
             playlists = saved.playlists
             favorites = saved.favorites
             recent = saved.recent
         } else {
-            channels = Channel.samples
+            channels = []
             playlists = []
             favorites = []
             recent = []
         }
+        language = UserDefaults.standard.string(forKey: "nanostream.language") ?? "中文"
+        themeMode = UserDefaults.standard.string(forKey: "nanostream.theme") ?? "System"
+        colorTheme = UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "剧毒绿"
+        preferredPlayer = PreferredPlayer(rawValue: UserDefaults.standard.string(forKey: "nanostream.player") ?? "KSPlayer") ?? .ksPlayer
+        networkBufferMilliseconds = UserDefaults.standard.object(forKey: "nanostream.buffer") as? Double ?? 3000
     }
 
     var groups: [String] { ["全部"] + Array(Set(channels.map(\.group))).sorted() }
@@ -46,6 +56,31 @@ final class AppState: ObservableObject {
         quality == "全部" ? visibleChannels : visibleChannels.filter { $0.quality == quality }
     }
 
+    var accent: Color {
+        switch colorTheme {
+        case "Cyberpunk": return Color(red: 0.2, green: 0.8, blue: 1)
+        case "落日金": return Color(red: 1, green: 0.72, blue: 0.2)
+        case "霓虹粉": return Color(red: 1, green: 0.28, blue: 0.72)
+        case "深海蓝": return Color(red: 0.25, green: 0.55, blue: 1)
+        default: return Color.neon
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch themeMode { case "Light": return .light; case "Dark": return .dark; default: return nil }
+    }
+
+    func setLanguage(_ value: String) { language = value; UserDefaults.standard.set(value, forKey: "nanostream.language") }
+    func setTheme(_ value: String) { themeMode = value; UserDefaults.standard.set(value, forKey: "nanostream.theme") }
+    func setColorTheme(_ value: String) { colorTheme = value; UserDefaults.standard.set(value, forKey: "nanostream.colorTheme") }
+    func setPreferredPlayer(_ value: PreferredPlayer) { preferredPlayer = value; UserDefaults.standard.set(value.rawValue, forKey: "nanostream.player") }
+    func setBuffer(_ value: Double) { networkBufferMilliseconds = value; UserDefaults.standard.set(value, forKey: "nanostream.buffer") }
+    func localized(_ key: String) -> String {
+        guard language != "中文" else { return key }
+        let table: [String: (String, String)] = ["设置": ("Settings", "Cài đặt"), "播放列表": ("Playlists", "Danh sách phát"), "收藏": ("Favorites", "Yêu thích"), "主页": ("Home", "Trang chủ")]
+        return language == "English" ? (table[key]?.0 ?? key) : (table[key]?.1 ?? key)
+    }
+
     func toggleFavorite(_ channel: Channel) {
         if favorites.contains(channel.id) { favorites.remove(channel.id) } else { favorites.insert(channel.id) }
         save()
@@ -56,14 +91,14 @@ final class AppState: ObservableObject {
         recent.removeAll { $0 == channel.id }
         recent.insert(channel.id, at: 0)
         recent = Array(recent.prefix(24))
-        player.play(channel: channel)
+        player.play(channel: channel, bufferMilliseconds: networkBufferMilliseconds)
         save()
     }
 
     func channel(for id: String) -> Channel? { channels.first { $0.id == id } }
 
-    func addPlaylist(name: String, kind: PlaylistKind, endpoint: String, username: String = "", password: String = "") {
-        Task { await importPlaylist(name: name, kind: kind, endpoint: endpoint, username: username, password: password) }
+    func addPlaylist(name: String, kind: PlaylistKind, endpoint: String, username: String = "", password: String = "", completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
+        Task { await importPlaylist(name: name, kind: kind, endpoint: endpoint, username: username, password: password, completion: completion) }
     }
 
     func addPlaylistFromText(name: String, text: String) {
@@ -79,12 +114,19 @@ final class AppState: ObservableObject {
 
     func removePlaylist(_ playlist: Playlist) {
         playlists.removeAll { $0.id == playlist.id }
+        if playlists.isEmpty { channels.removeAll() }
         save()
     }
 
-    func clearHistory() { recent.removeAll(); save() }
+    func refreshPlaylists() {
+        guard let playlist = playlists.first else { return }
+        addPlaylist(name: playlist.name, kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: playlist.password)
+    }
 
-    private func importPlaylist(name: String, kind: PlaylistKind, endpoint: String, username: String, password: String) async {
+    func clearHistory() { recent.removeAll(); save() }
+    func clearImageCache() { URLCache.shared.removeAllCachedResponses(); playlistError = "图片缓存已清除。" }
+
+    private func importPlaylist(name: String, kind: PlaylistKind, endpoint: String, username: String, password: String, completion: @escaping @MainActor (Bool) -> Void) async {
         isLoadingPlaylist = true
         playlistError = nil
         do {
@@ -96,8 +138,10 @@ final class AppState: ObservableObject {
             selectedGroup = "全部"
             searchText = ""
             save()
+            await completion(true)
         } catch {
             playlistError = error.localizedDescription
+            await completion(false)
         }
         isLoadingPlaylist = false
     }
@@ -121,6 +165,13 @@ private struct SavedState: Codable {
     var recent: [String]
 }
 
+enum PreferredPlayer: String, CaseIterable, Identifiable {
+    case auto = "Auto"
+    case avPlayer = "AVPlayer"
+    case ksPlayer = "KSPlayer"
+    var id: String { rawValue }
+}
+
 @MainActor
 final class StreamPlayer: ObservableObject {
     @Published private(set) var player = AVPlayer()
@@ -128,7 +179,7 @@ final class StreamPlayer: ObservableObject {
     @Published private(set) var errorMessage: String?
     private var statusObservation: NSKeyValueObservation?
 
-    func play(channel: Channel) {
+    func play(channel: Channel, bufferMilliseconds: Double = 3000) {
         guard let url = channel.streamURL else {
             errorMessage = "该频道没有可播放地址。"
             return
@@ -136,6 +187,7 @@ final class StreamPlayer: ObservableObject {
         errorMessage = nil
         currentURL = url
         let item = AVPlayerItem(url: url)
+        item.preferredForwardBufferDuration = max(bufferMilliseconds / 1000, 0)
         statusObservation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
             let message = item.error?.localizedDescription ?? "播放失败，请检查频道地址。"
@@ -234,17 +286,4 @@ enum M3UParser {
               let end = line[start...].firstIndex(of: "\"") else { return nil }
         return String(line[start..<end])
     }
-}
-
-private extension Channel {
-    static let samples: [Channel] = [
-        Channel(name: "THÔNG BÁO: HỆ THỐNG T...", group: "新闻", streamURL: URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"), quality: "FHD"),
-        Channel(name: "NOW Sports 616 4K (Not 24/7)", group: "体育", streamURL: URL(string: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"), quality: "4K UHD"),
-        Channel(name: "FOX 4K (Not 24/7) 01", group: "体育", quality: "4K UHD"),
-        Channel(name: "FOX 4K (Not 24/7) 02", group: "体育", quality: "4K UHD"),
-        Channel(name: "FOX 4K (Not 24/7) 03", group: "体育", quality: "4K UHD"),
-        Channel(name: "Clarity 4K", group: "电影", quality: "4K UHD"),
-        Channel(name: "Stingray NOW 4K CA", group: "音乐", quality: "4K UHD"),
-        Channel(name: "TSN 4K CA", group: "体育", quality: "4K UHD")
-    ]
 }
