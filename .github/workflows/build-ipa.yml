@@ -37,8 +37,6 @@ jobs:
             -destination 'generic/platform=iOS' \
             CONFIGURATION_BUILD_DIR="$PWD/build/Products" \
             PRODUCT_BUNDLE_IDENTIFIER=com.k20.nanostream.clone \
-            INFOPLIST_FILE=Resources/AppInfo.plist \
-            GENERATE_INFOPLIST_FILE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             | tee build.log
