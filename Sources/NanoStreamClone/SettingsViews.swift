@@ -66,8 +66,87 @@ struct PlaylistFormView: View {
     @State private var source = "M3U 链接"
     @State private var name = ""
     @State private var url = ""
+
     var body: some View {
-        NavigationStack { ScrollView { VStack(alignment: .leading, spacing: 16) { Text("添加播放列表").font(.system(size: 24, weight: .bold)).padding(.top, 8); Text("播放列表来源").font(.subheadline.weight(.semibold)).foregroundStyle(.neon); HStack(spacing: 10) { ForEach(["本地文件", "M3U 链接", "Xtream"], id: \.self) { item in Button { source = item } label: { VStack(spacing: 8) { Image(systemName: item == "本地文件" ? "doc" : item == "M3U 链接" ? "link" : "server.rack").font(.title2); Text(item).font(.caption) }.frame(maxWidth: .infinity).frame(height: 82).foregroundStyle(source == item ? .neon : .white.opacity(0.7)).background(source == item ? Color.neon.opacity(0.15) : Color.panel, in: RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(source == item ? Color.neon : .white.opacity(0.12), lineWidth: 1)) }.buttonStyle(.plain) } }; Text("详细信息").font(.subheadline.weight(.semibold)).foregroundStyle(.neon); TextField("输入列表名称", text: $name).fieldStyle(); TextField("URL (http://...)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle(); Button("添加列表") { state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url); dismiss() }.font(.headline).foregroundStyle(url.isEmpty ? .white.opacity(0.35) : .ink).frame(maxWidth: .infinity).frame(height: 56).background(url.isEmpty ? Color.panel : Color.neon, in: RoundedRectangle(cornerRadius: 14)).disabled(url.isEmpty) }.padding(22) }.background(Color.appBackground).toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } } }.presentationDetents([.large])
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("添加播放列表")
+                        .font(.system(size: 24, weight: .bold))
+                        .padding(.top, 8)
+                    Text("播放列表来源")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.neon)
+                    SourcePicker(source: $source)
+                    Text("详细信息")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.neon)
+                    TextField("输入列表名称", text: $name)
+                        .fieldStyle()
+                    TextField("URL (http://...)", text: $url)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .fieldStyle()
+                    AddPlaylistButton(name: name, source: source, url: url) {
+                        state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url)
+                        dismiss()
+                    }
+                }
+                .padding(22)
+            }
+            .background(Color.appBackground)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+}
+
+struct SourcePicker: View {
+    @Binding var source: String
+    private let options = ["本地文件", "M3U 链接", "Xtream"]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(options, id: \.self) { item in
+                Button { source = item } label: {
+                    VStack(spacing: 8) {
+                        Image(systemName: icon(for: item)).font(.title2)
+                        Text(item).font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 82)
+                    .foregroundStyle(source == item ? Color.neon : .white.opacity(0.7))
+                    .background(source == item ? Color.neon.opacity(0.15) : Color.panel, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(source == item ? Color.neon : .white.opacity(0.12), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func icon(for item: String) -> String {
+        switch item { case "本地文件": return "doc"; case "M3U 链接": return "link"; default: return "server.rack" }
+    }
+}
+
+struct AddPlaylistButton: View {
+    let name: String
+    let source: String
+    let url: String
+    let action: () -> Void
+
+    var body: some View {
+        Button("添加列表", action: action)
+            .font(.headline)
+            .foregroundStyle(url.isEmpty ? .white.opacity(0.35) : .ink)
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+            .background(url.isEmpty ? Color.panel : Color.neon, in: RoundedRectangle(cornerRadius: 14))
+            .disabled(url.isEmpty)
     }
 }
 private extension View { func fieldStyle() -> some View { self.textFieldStyle(.plain).padding(16).background(Color.cardInner, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.14))) } }
