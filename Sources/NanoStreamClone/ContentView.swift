@@ -86,7 +86,7 @@ struct HomeView: View {
                 RecentRail().padding(.top, 23)
                 Text("Could not refresh 世界杯🏆: The server returned HTTP 401.").font(.system(size: 14)).foregroundStyle(.neon).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 8)
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    ForEach(state.channels(for: selectedQuality)) { channel in ChannelCard(channel: channel) { selectedDetail = channel } }
+                    ForEach(state.channels(for: selectedQuality)) { channel in ChannelCard(channel: channel) { state.play(channel); selectedDetail = channel } }
                 }.padding(.horizontal, 22).padding(.top, 17).padding(.bottom, 110)
             }
         }
@@ -148,15 +148,18 @@ struct ChannelDetailView: View {
     let channel: Channel
     @State private var mode = "频道"
     @State private var search = ""
+    @State private var showInfo = false
     var body: some View {
         ZStack { Color.appBackground.ignoresSafeArea(); ScrollView(showsIndicators: false) { VStack(spacing: 14) {
-            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(channel.name).font(.headline); Spacer(); Image(systemName: "info.circle"); Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star") }.padding(.horizontal, 18).padding(.top, 12)
+            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(channel.name).font(.headline); Spacer(); Button { showInfo = true } label: { Image(systemName: "info.circle") }.buttonStyle(.plain); Button { state.toggleFavorite(channel) } label: { Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star") }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.top, 12)
             ZStack(alignment: .bottomLeading) { if channel.streamURL != nil { PlayerSurface(player: state.player.player) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
             Picker("", selection: $mode) { Text("订阅").tag("订阅"); Text("频道").tag("频道"); Text("节目").tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18)
             HStack { Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.5)); TextField("搜索频道...", text: $search); Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.neon) }.padding(14).background(Color.panel, in: RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 18)
             ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in Button { state.play(item) } label: { HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text("IPTV Channel").font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == channel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == channel.id ? .neon : .white.opacity(0.4)) }.padding(10).background(item.id == channel.id ? Color.neon.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }.buttonStyle(.plain) }
             Spacer(minLength: 110)
         } } }
+        .onAppear { state.play(channel) }
+        .alert("编码信息", isPresented: $showInfo) { Button("关闭", role: .cancel) {} } message: { Text("Video\nResolution 1920 × 1080\nFrame Rate 50 fps\nCodec H.264\nAudio AAC") }
     }
 }
 

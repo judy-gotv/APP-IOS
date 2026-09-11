@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @AppStorage("subtitleFontSize") private var subtitleFontSize = 18.0
@@ -66,6 +67,9 @@ struct PlaylistFormView: View {
     @State private var source = "M3U 链接"
     @State private var name = ""
     @State private var url = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var showFileImporter = false
 
     var body: some View {
         NavigationStack {
@@ -77,18 +81,23 @@ struct PlaylistFormView: View {
                     Text("播放列表来源")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.neon)
-                    SourcePicker(source: $source)
+                    SourcePicker(source: $source, chooseFile: { showFileImporter = true })
                     Text("详细信息")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.neon)
                     TextField("输入列表名称", text: $name)
                         .fieldStyle()
-                    TextField("URL (http://...)", text: $url)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .fieldStyle()
+                    if source == "Xtream" {
+                        TextField("服务器地址 (http://...)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
+                        TextField("用户名", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
+                        SecureField("密码", text: $password).fieldStyle()
+                    } else if source == "M3U 链接" {
+                        TextField("URL (http://...)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
+                    } else {
+                        Button { showFileImporter = true } label: { Label(url.isEmpty ? "选择本地 M3U 文件" : url, systemImage: "doc.badge.plus").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).fieldStyle()
+                    }
                     AddPlaylistButton(name: name, source: source, url: url) {
-                        state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url)
+                        state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url, username: username, password: password)
                         dismiss()
                     }
                 }
@@ -102,17 +111,27 @@ struct PlaylistFormView: View {
             }
         }
         .presentationDetents([.large])
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.plainText, .data], allowsMultipleSelection: false) { result in
+            guard case .success(let urls) = result, let fileURL = urls.first else { return }
+            guard fileURL.startAccessingSecurityScopedResource() else { return }
+            defer { fileURL.stopAccessingSecurityScopedResource() }
+            guard let data = try? Data(contentsOf: fileURL), let text = String(data: data, encoding: .utf8) else { return }
+            state.addPlaylistFromText(name: name.isEmpty ? fileURL.deletingPathExtension().lastPathComponent : name, text: text)
+            url = fileURL.lastPathComponent
+            source = "本地文件"
+        }
     }
 }
 
 struct SourcePicker: View {
     @Binding var source: String
+    let chooseFile: () -> Void
     private let options = ["本地文件", "M3U 链接", "Xtream"]
 
     var body: some View {
         HStack(spacing: 10) {
             ForEach(options, id: \.self) { item in
-                Button { source = item } label: {
+                Button { if item == "本地文件" { chooseFile() } else { source = item } } label: {
                     VStack(spacing: 8) {
                         Image(systemName: icon(for: item)).font(.title2)
                         Text(item).font(.caption)
