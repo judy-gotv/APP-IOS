@@ -86,7 +86,7 @@ struct HomeView: View {
                 RecentRail().padding(.top, 23)
                 Text("Could not refresh 世界杯🏆: The server returned HTTP 401.").font(.system(size: 14)).foregroundStyle(.neon).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.top, 8)
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    ForEach(state.visibleChannels) { channel in ChannelCard(channel: channel) { selectedDetail = channel } }
+                    ForEach(state.channels(for: selectedQuality)) { channel in ChannelCard(channel: channel) { selectedDetail = channel } }
                 }.padding(.horizontal, 22).padding(.top, 17).padding(.bottom, 110)
             }
         }
@@ -122,13 +122,23 @@ struct ChannelCard: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 11).fill(Color.black).frame(height: 112)
-                Text(channel.name.contains("FOX") ? "FOX" : channel.name.prefix(1).uppercased()).font(.system(size: channel.name.contains("FOX") ? 45 : 30, weight: .heavy)).frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let logoURL = channel.logoURL {
+                    AsyncImage(url: logoURL) { phase in
+                        if let image = phase.image { image.resizable().scaledToFit().padding(18) } else { fallbackLogo }
+                    }
+                } else { fallbackLogo }
                 HStack { Text("● LIVE").font(.system(size: 9, weight: .bold)).foregroundStyle(.neon).padding(.horizontal, 7).padding(.vertical, 4).background(Color.green.opacity(0.22), in: Capsule()); Spacer(); Text("4K UHD").font(.system(size: 9, weight: .bold)).foregroundStyle(.neon).padding(.horizontal, 6).padding(.vertical, 4).background(Color.green.opacity(0.22), in: Capsule()) }.padding(9)
                 VStack { Spacer(); HStack { Text("198ms").font(.system(size: 10, design: .monospaced)).foregroundStyle(.neon); Spacer(); Button { state.toggleFavorite(channel) } label: { Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star").foregroundStyle(.white.opacity(0.75)) }.buttonStyle(.plain) }.padding(9) }.frame(height: 112)
             }
             Text(channel.name).font(.system(size: 14, weight: .semibold)).lineLimit(1)
-            Text("1080p · 50 FPS").font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
+            Text("\(channel.quality) · 50 FPS").font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
         }.padding(10).background(Color.card, in: RoundedRectangle(cornerRadius: 15)).overlay(RoundedRectangle(cornerRadius: 15).stroke(Color.neon.opacity(0.38), lineWidth: 1)).contentShape(Rectangle()).onTapGesture(perform: onOpen)
+    }
+
+    private var fallbackLogo: some View {
+        Text(channel.name.contains("FOX") ? "FOX" : channel.name.prefix(1).uppercased())
+            .font(.system(size: channel.name.contains("FOX") ? 45 : 30, weight: .heavy))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -141,13 +151,32 @@ struct ChannelDetailView: View {
     var body: some View {
         ZStack { Color.appBackground.ignoresSafeArea(); ScrollView(showsIndicators: false) { VStack(spacing: 14) {
             HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(channel.name).font(.headline); Spacer(); Image(systemName: "info.circle"); Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star") }.padding(.horizontal, 18).padding(.top, 12)
-            ZStack(alignment: .bottomLeading) { if let url = channel.streamURL { VideoPlayer(player: AVPlayer(url: url)) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
+            ZStack(alignment: .bottomLeading) { if channel.streamURL != nil { PlayerSurface(player: state.player.player) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
             Picker("", selection: $mode) { Text("订阅").tag("订阅"); Text("频道").tag("频道"); Text("节目").tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18)
             HStack { Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.5)); TextField("搜索频道...", text: $search); Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.neon) }.padding(14).background(Color.panel, in: RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 18)
-            ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text("IPTV Channel").font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == channel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == channel.id ? .neon : .white.opacity(0.4)) }.padding(10).background(item.id == channel.id ? Color.neon.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }
+            ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in Button { state.play(item) } label: { HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text("IPTV Channel").font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == channel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == channel.id ? .neon : .white.opacity(0.4)) }.padding(10).background(item.id == channel.id ? Color.neon.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }.buttonStyle(.plain) }
             Spacer(minLength: 110)
         } } }
     }
+}
+
+struct PlayerSurface: UIViewRepresentable {
+    let player: AVPlayer
+    func makeUIView(context: Context) -> UIView {
+        let view = PlayerContainerView()
+        view.playerLayer.player = player
+        return view
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {
+        (uiView as? PlayerContainerView)?.playerLayer.player = player
+    }
+}
+
+final class PlayerContainerView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    override init(frame: CGRect) { super.init(frame: frame); playerLayer.videoGravity = .resizeAspectFill; backgroundColor = .black }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
 struct FavoritesView: View {
@@ -156,10 +185,15 @@ struct FavoritesView: View {
         VStack(spacing: 0) {
             Text("收藏").font(.system(size: 31, weight: .bold)).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28).padding(.top, 62)
             Spacer()
-            Image(systemName: "star").font(.system(size: 58, weight: .thin)).foregroundStyle(.white.opacity(0.5))
-            Text(state.favorites.isEmpty ? "无收藏频道" : "收藏频道").font(.system(size: 23, weight: .bold)).padding(.top, 22)
-            Text("用星号标记频道以便在此快速访问。").font(.system(size: 17)).padding(.top, 5)
-            Spacer().frame(height: 180)
+            if state.favoriteChannels.isEmpty {
+                Image(systemName: "star").font(.system(size: 58, weight: .thin)).foregroundStyle(.white.opacity(0.5))
+                Text("无收藏频道").font(.system(size: 23, weight: .bold)).padding(.top, 22)
+                Text("用星号标记频道以便在此快速访问。").font(.system(size: 17)).padding(.top, 5)
+                Spacer().frame(height: 180)
+            } else {
+                LazyVStack(spacing: 12) { ForEach(state.favoriteChannels) { channel in ChannelCard(channel: channel) { state.play(channel) } } }.padding(.horizontal, 22).padding(.top, 28)
+                Spacer()
+            }
             Spacer()
         }.padding(.bottom, 110)
     }
@@ -174,7 +208,7 @@ struct PlaylistsView: View {
                 HStack { Button { } label: { Image(systemName: "arrow.clockwise").font(.title2).foregroundStyle(.neon) }.buttonStyle(.plain); Spacer(); Button { showAdd = true } label: { Image(systemName: "plus").font(.title2).foregroundStyle(.neon) }.buttonStyle(.plain) }.padding(.horizontal, 28).padding(.top, 54)
                 Text("播放列表").font(.system(size: 31, weight: .bold)).padding(.horizontal, 28).padding(.bottom, 16)
                 let items = state.playlists.isEmpty ? [Playlist(name: "K-20 IPTV", kind: .m3u, endpoint: "", channelCount: 1, lastRefresh: nil), Playlist(name: "世界杯🏆", kind: .m3u, endpoint: "", channelCount: 848, lastRefresh: nil)] : state.playlists
-                ForEach(items) { playlist in PlaylistRow(playlist: playlist) }
+                ForEach(items) { playlist in PlaylistRow(playlist: playlist) { state.removePlaylist(playlist) } }
             }.padding(.bottom, 120)
         }
     }
@@ -182,8 +216,9 @@ struct PlaylistsView: View {
 
 struct PlaylistRow: View {
     let playlist: Playlist
+    let onDelete: () -> Void
     var body: some View {
-        HStack { VStack(alignment: .leading, spacing: 8) { Text(playlist.name).font(.system(size: 18, weight: .bold)); HStack { Image(systemName: "tv").foregroundStyle(.neon); Text("\(playlist.channelCount) kênh").foregroundStyle(.neon); Text("·").foregroundStyle(.white.opacity(0.4)); Text(playlist.kind.rawValue).foregroundStyle(.white.opacity(0.55)) }.font(.subheadline) }; Spacer(); Image(systemName: "trash").foregroundStyle(.neon).padding(12).background(Color.neon.opacity(0.1), in: Circle()) }.padding(.horizontal, 18).padding(.vertical, 17).background(Color.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.neon.opacity(0.42), lineWidth: 1)).padding(.horizontal, 22)
+        HStack { VStack(alignment: .leading, spacing: 8) { Text(playlist.name).font(.system(size: 18, weight: .bold)); HStack { Image(systemName: "tv").foregroundStyle(Color.neon); Text("\(playlist.channelCount) kênh").foregroundStyle(Color.neon); Text("·").foregroundStyle(.white.opacity(0.4)); Text(playlist.kind.rawValue).foregroundStyle(.white.opacity(0.55)) }.font(.subheadline) }; Spacer(); Button(action: onDelete) { Image(systemName: "trash").foregroundStyle(Color.neon).padding(12).background(Color.neon.opacity(0.1), in: Circle()) }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.vertical, 17).background(Color.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.neon.opacity(0.42), lineWidth: 1)).padding(.horizontal, 22)
     }
 }
 
