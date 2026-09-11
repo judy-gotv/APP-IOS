@@ -1,0 +1,31 @@
+name: NanoStreamClone
+
+options:
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  groupOrdering:
+    - order: [Sources, Resources]
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+
+targets:
+  NanoStreamClone:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/NanoStreamClone
+        excludes:
+          - Reference/**
+    resources:
+      - path: Sources/NanoStreamClone/Reference
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone
+        INFOPLIST_FILE: Resources/AppInfo.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        SWIFT_EMIT_LOC_STRINGS: YES
