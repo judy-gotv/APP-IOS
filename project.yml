@@ -13,6 +13,11 @@ settings:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
 
+packages:
+  KSPlayer:
+    url: https://github.com/kingslay/KSPlayer.git
+    from: 2.3.4
+
 targets:
   NanoStreamClone:
     type: application
@@ -23,6 +28,8 @@ targets:
           - Reference/**
     resources:
       - path: Sources/NanoStreamClone/Reference
+    dependencies:
+      - package: KSPlayer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone

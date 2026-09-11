@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import KSPlayer
 
 struct ContentView: View {
     @EnvironmentObject private var state: AppState
@@ -152,7 +153,7 @@ struct ChannelDetailView: View {
     var body: some View {
         ZStack { Color.appBackground.ignoresSafeArea(); ScrollView(showsIndicators: false) { VStack(spacing: 14) {
             HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(channel.name).font(.headline); Spacer(); Button { showInfo = true } label: { Image(systemName: "info.circle") }.buttonStyle(.plain); Button { state.toggleFavorite(channel) } label: { Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star") }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.top, 12)
-            ZStack(alignment: .bottomLeading) { if channel.streamURL != nil { PlayerSurface(player: state.player.player) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
+            ZStack(alignment: .bottomLeading) { if let url = channel.streamURL { KSVideoPlayerView(url: url, options: KSOptions(), title: channel.name) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(.neon).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.neon.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
             Picker("", selection: $mode) { Text("订阅").tag("订阅"); Text("频道").tag("频道"); Text("节目").tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18)
             HStack { Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.5)); TextField("搜索频道...", text: $search); Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(.neon) }.padding(14).background(Color.panel, in: RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 18)
             ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in Button { state.play(item) } label: { HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text("IPTV Channel").font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == channel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == channel.id ? .neon : .white.opacity(0.4)) }.padding(10).background(item.id == channel.id ? Color.neon.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }.buttonStyle(.plain) }
@@ -163,24 +164,6 @@ struct ChannelDetailView: View {
     }
 }
 
-struct PlayerSurface: UIViewRepresentable {
-    let player: AVPlayer
-    func makeUIView(context: Context) -> UIView {
-        let view = PlayerContainerView()
-        view.playerLayer.player = player
-        return view
-    }
-    func updateUIView(_ uiView: UIView, context: Context) {
-        (uiView as? PlayerContainerView)?.playerLayer.player = player
-    }
-}
-
-final class PlayerContainerView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
-    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    override init(frame: CGRect) { super.init(frame: frame); playerLayer.videoGravity = .resizeAspectFill; backgroundColor = .black }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
 
 struct FavoritesView: View {
     @EnvironmentObject private var state: AppState
