@@ -138,7 +138,8 @@ final class StreamPlayer: ObservableObject {
         let item = AVPlayerItem(url: url)
         statusObservation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
-            Task { @MainActor in self?.errorMessage = item.error?.localizedDescription ?? "播放失败，请检查频道地址。" }
+            let message = item.error?.localizedDescription ?? "播放失败，请检查频道地址。"
+            Task { @MainActor [weak self] in self?.errorMessage = message }
         }
         player.replaceCurrentItem(with: item)
         player.play()
