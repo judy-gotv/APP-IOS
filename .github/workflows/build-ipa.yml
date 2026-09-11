@@ -48,6 +48,8 @@ jobs:
           set -euo pipefail
           APP_PATH="build/Products/NanoStreamClone.app"
           test -d "$APP_PATH"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
+          /usr/bin/codesign --display --verbose=2 "$APP_PATH" 2>&1 || true
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           cd build
