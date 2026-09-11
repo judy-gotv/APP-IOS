@@ -142,7 +142,7 @@ struct AddPlaylistButton: View {
     var body: some View {
         Button("添加列表", action: action)
             .font(.headline)
-            .foregroundStyle(url.isEmpty ? .white.opacity(0.35) : .ink)
+            .foregroundStyle(url.isEmpty ? .white.opacity(0.35) : Color.appBackground)
             .frame(maxWidth: .infinity)
             .frame(height: 56)
             .background(url.isEmpty ? Color.panel : Color.neon, in: RoundedRectangle(cornerRadius: 14))
