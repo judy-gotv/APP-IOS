@@ -27,15 +27,15 @@ jobs:
           sed -i '' 's/objectVersion = 77/objectVersion = 60/' NanoStreamClone.xcodeproj/project.pbxproj
           sed -i '' '/preferredProjectObjectVersion = 77;/d' NanoStreamClone.xcodeproj/project.pbxproj
 
-      - name: Archive unsigned app
+      - name: Build unsigned app
         run: |
           set -o pipefail
-          xcodebuild archive \
+          xcodebuild build \
             -project NanoStreamClone.xcodeproj \
             -scheme NanoStreamClone \
             -configuration Release \
             -destination 'generic/platform=iOS' \
-            -archivePath "$PWD/build/NanoStreamClone.xcarchive" \
+            CONFIGURATION_BUILD_DIR="$PWD/build/Products" \
             PRODUCT_BUNDLE_IDENTIFIER=com.k20.nanostream.clone \
             INFOPLIST_FILE=Resources/AppInfo.plist \
             GENERATE_INFOPLIST_FILE=NO \
@@ -46,7 +46,7 @@ jobs:
       - name: Package IPA
         run: |
           set -euo pipefail
-          APP_PATH="build/NanoStreamClone.xcarchive/Products/Applications/NanoStreamClone.app"
+          APP_PATH="build/Products/NanoStreamClone.app"
           test -d "$APP_PATH"
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
