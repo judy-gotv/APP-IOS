@@ -6,6 +6,8 @@
 	<string>NanoStream</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.k20.nanostream.clone</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleName</key>
 	<string>NanoStream</string>
 	<key>CFBundlePackageType</key>
@@ -14,6 +16,8 @@
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIDeviceFamily</key>

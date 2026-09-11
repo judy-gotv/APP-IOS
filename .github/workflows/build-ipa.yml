@@ -47,11 +47,12 @@ jobs:
           APP_PATH="build/Products/NanoStreamClone.app"
           test -d "$APP_PATH"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist"
           /usr/bin/codesign --display --verbose=2 "$APP_PATH" 2>&1 || true
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
           cd build
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload NanoStreamClone-unsigned.ipa
+          /usr/bin/zip -qry NanoStreamClone-unsigned.ipa Payload
 
       - name: Upload IPA and logs
         uses: actions/upload-artifact@v4
