@@ -26,7 +26,7 @@ struct SettingsView: View {
                     ToggleRow(title: "自动选择音轨", value: $autoAudio)
                     VStack(alignment: .leading, spacing: 10) {
                         Text("首选播放器").font(.system(size: 18))
-                        Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                        Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
                         Text("Dùng KSPlayer (FFmpeg) riêng cho IPTV. Tương thích hầu hết mọi định dạng stream.").font(.caption).foregroundStyle(.white.opacity(0.5))
                     }.padding(.vertical, 8)
                     HStack { Text("字幕大小  \(Int(subtitleFontSize)) pt").font(.system(size: 18)); Spacer(); Stepper("", value: $subtitleFontSize, in: 12...40, step: 1).labelsHidden() }
@@ -36,8 +36,8 @@ struct SettingsView: View {
                     LabeledField(title: "HTTP Proxy", text: $httpProxy, placeholder: "HTTP Proxy")
                 }
                 SettingsSection(title: "缓冲区", icon: "memorychip") {
-                    HStack { Text("网络缓存大小").font(.system(size: 18)); Spacer(); Text("\(Int(state.networkBufferMilliseconds)) ms").font(.system(size: 18, design: .monospaced)).foregroundStyle(.neon) }
-                    Slider(value: Binding(get: { state.networkBufferMilliseconds }, set: { state.setBuffer($0) }), in: 0...10000, step: 250).tint(.neon)
+                    HStack { Text("网络缓存大小").font(.system(size: 18)); Spacer(); Text("\(Int(state.networkBufferMilliseconds)) ms").font(.system(size: 18, design: .monospaced)).foregroundStyle(state.accent) }
+                    Slider(value: Binding(get: { state.networkBufferMilliseconds }, set: { state.setBuffer($0) }), in: 0...10000, step: 250).tint(state.accent)
                     Text("网络连接较慢或不稳定时，可增加缓存").font(.caption).foregroundStyle(.white.opacity(0.5))
                 }
                 SettingsSection(title: "数据与缓存", icon: "externaldrive") {

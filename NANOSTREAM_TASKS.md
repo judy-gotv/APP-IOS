@@ -1,0 +1,17 @@
+# NanoStream 项目任务清单
+
+- [x] 移除内置假播放列表与假频道，首次启动显示空状态。
+- [x] M3U/M3U8 网络地址异步加载并显示错误。
+- [x] Xtream 服务器、用户名、密码加载。
+- [x] 本地 M3U 文件选择与导入。
+- [x] 播放列表持久化、删除、刷新。
+- [x] 收藏与播放历史持久化、清空操作。
+- [x] AVPlayer / KSPlayer / Auto 三选一并保存。
+- [x] 网络缓存滑杆接入 AVPlayer/KSPlayer。
+- [x] 语言选择持久化并更新导航文字。
+- [x] System/Light/Dark 主题选择。
+- [x] Cyberpunk/落日金/剧毒绿/霓虹粉/深海蓝色彩主题。
+- [x] GitHub macOS Runner 编译、KSPlayer/FFmpeg 依赖和标准 IPA 封装。
+- [ ] 使用 Apple Developer 证书配置签名 IPA。
+- [ ] 在真实 iPhone 上逐页截图回归并完成最终视觉校准。
+- [ ] 使用授权的 M3U/Xtream 源完成网络播放验收。

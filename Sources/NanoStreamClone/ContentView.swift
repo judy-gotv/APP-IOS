@@ -48,7 +48,7 @@ struct BottomBar: View {
                         Text(state.localized(item.rawValue)).font(.system(size: 11, weight: .medium))
                         Circle().fill(tab == item ? Color.neon : .clear).frame(width: 4, height: 4)
                     }
-                    .foregroundStyle(tab == item ? Color.neon : .white.opacity(0.58))
+                    .foregroundStyle(tab == item ? state.accent : .white.opacity(0.58))
                     .frame(maxWidth: .infinity)
                 }.buttonStyle(.plain)
             }
@@ -81,7 +81,7 @@ struct HomeView: View {
                 }.padding(.horizontal, 14).frame(height: 48).background(Color.panel, in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 22).padding(.top, 12)
                 HStack(spacing: 10) {
                     ForEach(qualities, id: \.self) { quality in
-                        Button(quality) { selectedQuality = quality }.buttonStyle(QualityChip(selected: selectedQuality == quality))
+                        Button(quality) { selectedQuality = quality }.buttonStyle(QualityChip(selected: selectedQuality == quality, accent: state.accent))
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "square.grid.2x2").foregroundStyle(.neon).frame(width: 46, height: 40).background(Color.panel, in: RoundedRectangle(cornerRadius: 20))
@@ -257,14 +257,30 @@ struct PlaylistRow: View {
 }
 
 struct CircleButton: View { let icon: String; var body: some View { Image(systemName: icon).font(.title3).foregroundStyle(.white).frame(width: 48, height: 48).background(Color.panel, in: Circle()).overlay(Circle().stroke(.white.opacity(0.2))) } }
-struct QualityChip: ButtonStyle { let selected: Bool; func makeBody(configuration: Configuration) -> some View { configuration.label.font(.subheadline.weight(.semibold)).foregroundStyle(selected ? .white : .white.opacity(0.65)).padding(.horizontal, 18).frame(height: 40).background(selected ? Color.neon : Color.panel, in: Capsule()).opacity(configuration.isPressed ? 0.7 : 1) } }
+struct QualityChip: ButtonStyle { let selected: Bool; let accent: Color; func makeBody(configuration: Configuration) -> some View { configuration.label.font(.subheadline.weight(.semibold)).foregroundStyle(selected ? .white : .white.opacity(0.65)).padding(.horizontal, 18).frame(height: 40).background(selected ? accent : Color.panel, in: Capsule()).opacity(configuration.isPressed ? 0.7 : 1) } }
 
 extension Color {
-    static let appBackground = Color(red: 0.015, green: 0.035, blue: 0.055)
-    static let panel = Color(red: 0.11, green: 0.13, blue: 0.17)
-    static let card = Color(red: 0.12, green: 0.15, blue: 0.16)
-    static let cardInner = Color(red: 0.055, green: 0.07, blue: 0.08)
-    static let neon = Color(red: 0.2, green: 1.0, blue: 0.12)
+    static var appBackground: Color {
+        UserDefaults.standard.string(forKey: "nanostream.theme") == "Light" ? Color(red: 0.95, green: 0.96, blue: 0.98) : Color(red: 0.015, green: 0.035, blue: 0.055)
+    }
+    static var panel: Color {
+        UserDefaults.standard.string(forKey: "nanostream.theme") == "Light" ? Color.white : Color(red: 0.11, green: 0.13, blue: 0.17)
+    }
+    static var card: Color {
+        UserDefaults.standard.string(forKey: "nanostream.theme") == "Light" ? Color(red: 0.92, green: 0.93, blue: 0.95) : Color(red: 0.12, green: 0.15, blue: 0.16)
+    }
+    static var cardInner: Color {
+        UserDefaults.standard.string(forKey: "nanostream.theme") == "Light" ? Color(red: 0.86, green: 0.88, blue: 0.91) : Color(red: 0.055, green: 0.07, blue: 0.08)
+    }
+    static var neon: Color {
+        switch UserDefaults.standard.string(forKey: "nanostream.colorTheme") {
+        case "Cyberpunk": return Color(red: 0.2, green: 0.8, blue: 1)
+        case "落日金": return Color(red: 1, green: 0.72, blue: 0.2)
+        case "霓虹粉": return Color(red: 1, green: 0.28, blue: 0.72)
+        case "深海蓝": return Color(red: 0.25, green: 0.55, blue: 1)
+        default: return Color(red: 0.2, green: 1.0, blue: 0.12)
+        }
+    }
 }
 
 // Allows the concise `.neon` style spelling in SwiftUI modifiers.
