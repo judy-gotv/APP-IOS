@@ -21,7 +21,11 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate --spec project.yml
+        run: |
+          xcodegen generate --spec project.yml
+          # XcodeGen may emit the newest project format; Xcode 15.4 accepts objectVersion 60.
+          sed -i '' 's/objectVersion = 77/objectVersion = 60/' NanoStreamClone.xcodeproj/project.pbxproj
+          sed -i '' '/preferredProjectObjectVersion = 77;/d' NanoStreamClone.xcodeproj/project.pbxproj
 
       - name: Archive unsigned app
         run: |

@@ -1,6 +1,7 @@
 name: NanoStreamClone
 
 options:
+  xcodeVersion: "15.0"
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
