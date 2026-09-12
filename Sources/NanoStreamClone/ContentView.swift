@@ -358,7 +358,7 @@ struct PlaylistRow: View {
     let playlist: Playlist
     let onDelete: () -> Void
     var body: some View {
-        HStack { VStack(alignment: .leading, spacing: 8) { Text(playlist.name).font(.system(size: 18, weight: .bold)); HStack { Image(systemName: "tv").foregroundStyle(Color.neon); Text("\(playlist.channelCount) \(state.language == "中文" ? "频道" : "channels")").foregroundStyle(Color.neon); Text("·").foregroundStyle(.white.opacity(0.4)); Text(playlist.kind.rawValue).foregroundStyle(.white.opacity(0.55)) }.font(.subheadline) }; Spacer(); Button(action: onDelete) { Image(systemName: "trash").foregroundStyle(Color.neon).padding(12).background(Color.neon.opacity(0.1), in: Circle()) }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.vertical, 17).background(Color.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.neon.opacity(0.42), lineWidth: 1)).padding(.horizontal, 22)
+        HStack { VStack(alignment: .leading, spacing: 8) { Text(playlist.name).font(.system(size: 18, weight: .bold)); HStack { Image(systemName: "tv").foregroundStyle(Color.neon); Text("\(playlist.channelCount) \(state.localized("频道"))").foregroundStyle(Color.neon); Text("·").foregroundStyle(.white.opacity(0.4)); Text(playlist.kind.rawValue).foregroundStyle(.white.opacity(0.55)) }.font(.subheadline) }; Spacer(); Button(action: onDelete) { Image(systemName: "trash").foregroundStyle(Color.neon).padding(12).background(Color.neon.opacity(0.1), in: Circle()) }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.vertical, 17).background(Color.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.neon.opacity(0.42), lineWidth: 1)).padding(.horizontal, 22)
     }
 }
 

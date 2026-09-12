@@ -97,9 +97,49 @@ final class AppState: ObservableObject {
             "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"),
             "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"),
             "网络缓存大小": ("Network buffer", "Bộ đệm mạng"), "清除图片缓存": ("Clear image cache", "Xóa bộ nhớ ảnh"), "清除播放历史": ("Clear playback history", "Xóa lịch sử phát"), "选择本地 M3U 文件": ("Choose local M3U file", "Chọn tệp M3U cục bộ"), "输入列表名称": ("Playlist name", "Tên danh sách phát"), "详细信息": ("Details", "Chi tiết"), "播放列表来源": ("Playlist source", "Nguồn danh sách phát"), "添加列表": ("Add playlist", "Thêm danh sách phát"),
-            "2列": ("2 columns", "2 cột"), "4列": ("4 columns", "4 cột")
+            "2列": ("2 columns", "2 cột"), "4列": ("4 columns", "4 cột"),
+            "AVPlayer 使用系统原生解码。": ("AVPlayer uses Apple's native decoder.", "AVPlayer dùng bộ giải mã gốc của Apple."),
+            "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。": ("KSPlayer uses FFmpeg for broader IPTV format support.", "KSPlayer dùng FFmpeg để hỗ trợ nhiều định dạng IPTV hơn."),
+            "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。": ("Auto tries AVPlayer first, then switches to KSPlayer if it fails.", "Tự động thử AVPlayer trước, sau đó chuyển sang KSPlayer nếu lỗi."),
+            "网络连接较慢或不稳定时，可增加缓存": ("Increase the buffer for slow or unstable connections.", "Tăng bộ đệm khi kết nối chậm hoặc không ổn định."),
+            "NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。": ("NanoStream is a media player shell. Only add playlists and streams you are authorized to watch.", "NanoStream là trình phát đa phương tiện. Chỉ thêm danh sách và luồng bạn được phép xem."),
+            "文件中没有找到有效频道。": ("No valid channels were found in the file.", "Không tìm thấy kênh hợp lệ trong tệp."),
+            "播放列表添加失败。": ("Failed to add the playlist.", "Không thể thêm danh sách phát."),
+            "图片缓存已清除。": ("Image cache cleared.", "Đã xóa bộ nhớ ảnh."),
+            "播放列表地址无效。": ("The playlist URL is invalid.", "URL danh sách phát không hợp lệ."),
+            "播放列表为空或没有有效频道。": ("The playlist is empty or has no valid channels.", "Danh sách phát trống hoặc không có kênh hợp lệ."),
+            "返回内容不是有效的 M3U 播放列表。": ("The response is not a valid M3U playlist.", "Nội dung trả về không phải danh sách M3U hợp lệ."),
+            "系统": ("System", "Hệ thống"), "浅色": ("Light", "Sáng"), "深色": ("Dark", "Tối"),
+            "赛博朋克": ("Cyberpunk", "Cyberpunk"), "落日金": ("Sunset Gold", "Vàng hoàng hôn"), "剧毒绿": ("Toxic Green", "Xanh độc"), "霓虹粉": ("Neon Pink", "Hồng neon"), "深海蓝": ("Deep Sea Blue", "Xanh biển sâu"),
+            "本地文件": ("Local file", "Tệp cục bộ"), "M3U 链接": ("M3U link", "Liên kết M3U"), "服务器地址 (http://...)": ("Server URL (http://...)", "URL máy chủ (http://...)"), "用户名": ("Username", "Tên người dùng"), "密码": ("Password", "Mật khẩu")
         ]
         return language == "English" ? (table[key]?.0 ?? key) : (table[key]?.1 ?? key)
+    }
+
+    func localizedValue(_ value: String) -> String {
+        switch value {
+        case "System": return localized("系统")
+        case "Light": return localized("浅色")
+        case "Dark": return localized("深色")
+        case "Cyberpunk": return localized("赛博朋克")
+        case "落日金": return localized("落日金")
+        case "剧毒绿": return localized("剧毒绿")
+        case "霓虹粉": return localized("霓虹粉")
+        case "深海蓝": return localized("深海蓝")
+        default: return value
+        }
+    }
+
+    func localizedError(_ error: Error) -> String {
+        if let playlistError = error as? PlaylistLoadError {
+            switch playlistError {
+            case .invalidURL: return localized("播放列表地址无效。")
+            case .httpStatus(let status): return language == "中文" ? "服务器返回 HTTP \(status)。" : "The server returned HTTP \(status)."
+            case .empty: return localized("播放列表为空或没有有效频道。")
+            case .invalidFormat: return localized("返回内容不是有效的 M3U 播放列表。")
+            }
+        }
+        return error.localizedDescription
     }
 
     func toggleFavorite(_ channel: Channel) {
@@ -124,7 +164,7 @@ final class AppState: ObservableObject {
     func addPlaylistFromText(name: String, text: String) {
         Task { @MainActor in
             let parsed = M3UParser.parse(text: text)
-            guard !parsed.isEmpty else { playlistError = "文件中没有找到有效频道。"; return }
+            guard !parsed.isEmpty else { playlistError = localized("文件中没有找到有效频道。"); return }
             channels = parsed
             playlists.insert(Playlist(name: name.isEmpty ? "本地播放列表" : name, kind: .m3u, endpoint: "本地文件", channelCount: parsed.count, lastRefresh: Date()), at: 0)
             playlistError = nil
@@ -144,7 +184,7 @@ final class AppState: ObservableObject {
     }
 
     func clearHistory() { recent.removeAll(); save() }
-    func clearImageCache() { URLCache.shared.removeAllCachedResponses(); playlistError = "图片缓存已清除。" }
+    func clearImageCache() { URLCache.shared.removeAllCachedResponses(); playlistError = localized("图片缓存已清除。") }
 
     private func importPlaylist(name: String, kind: PlaylistKind, endpoint: String, username: String, password: String, completion: @escaping @MainActor (Bool) -> Void) async {
         isLoadingPlaylist = true
@@ -160,7 +200,7 @@ final class AppState: ObservableObject {
             save()
             await completion(true)
         } catch {
-            playlistError = error.localizedDescription
+            playlistError = localizedError(error)
             await completion(false)
         }
         isLoadingPlaylist = false
