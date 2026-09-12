@@ -253,7 +253,7 @@ final class PlayerSession: ObservableObject {
         player = AVPlayer(playerItem: item)
         observation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
-            Task { @MainActor in self?.didFail = true }
+            Task { @MainActor [weak self] in self?.didFail = true }
         }
         player.play()
     }
