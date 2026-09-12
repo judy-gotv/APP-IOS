@@ -84,7 +84,7 @@ struct HomeView: View {
                         }
                     } label: {
                         Capsule().fill(Color.panel).frame(width: 125, height: 42).overlay {
-                            Label(state.selectedGroup, systemImage: "list.bullet.rectangle").font(.subheadline.weight(.semibold))
+                            Label(state.selectedGroup == "全部" ? state.localized("全部") : state.selectedGroup, systemImage: "list.bullet.rectangle").font(.subheadline.weight(.semibold))
                         }
                     }.buttonStyle(.plain)
                 }.padding(.horizontal, 22).padding(.top, 12)
@@ -107,7 +107,7 @@ struct HomeView: View {
                 }.padding(.horizontal, 14).frame(height: 48).background(Color.panel, in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 22).padding(.top, 12)
                 HStack(spacing: 10) {
                     ForEach(qualities, id: \.self) { quality in
-                        Button(quality) { selectedQuality = quality }.buttonStyle(QualityChip(selected: selectedQuality == quality, accent: state.accent))
+                        Button(quality == "全部" ? state.localized("全部") : quality) { selectedQuality = quality }.buttonStyle(QualityChip(selected: selectedQuality == quality, accent: state.accent))
                     }
                     Spacer(minLength: 0)
                     Menu {
