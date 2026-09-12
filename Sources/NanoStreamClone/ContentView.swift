@@ -186,19 +186,26 @@ struct ChannelDetailView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
     let channel: Channel
+    @State private var activeChannel: Channel
     @State private var mode = "频道"
     @State private var search = ""
     @State private var showInfo = false
+
+    init(channel: Channel) {
+        self.channel = channel
+        _activeChannel = State(initialValue: channel)
+    }
+
     var body: some View {
         ZStack { Color.appBackground.ignoresSafeArea(); ScrollView(showsIndicators: false) { VStack(spacing: 14) {
-            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(channel.name).font(.headline); Spacer(); Button { showInfo = true } label: { Image(systemName: "info.circle") }.buttonStyle(.plain); Button { state.toggleFavorite(channel) } label: { Image(systemName: state.favorites.contains(channel.id) ? "star.fill" : "star") }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.top, 12)
-            ZStack(alignment: .bottomLeading) { if let url = channel.streamURL { PlayerSurface(url: url, title: channel.name, engine: state.preferredPlayer, bufferMilliseconds: state.networkBufferMilliseconds, allowsPictureInPicture: state.pictureInPicture) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(state.accent).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(state.accent.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
+            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(activeChannel.name).font(.headline).lineLimit(1); Spacer(); Button { showInfo = true } label: { Image(systemName: "info.circle") }.buttonStyle(.plain); Button { state.toggleFavorite(activeChannel) } label: { Image(systemName: state.favorites.contains(activeChannel.id) ? "star.fill" : "star") }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.top, 12)
+            ZStack(alignment: .bottomLeading) { if let url = activeChannel.streamURL { PlayerSurface(url: url, title: activeChannel.name, engine: state.preferredPlayer, bufferMilliseconds: state.networkBufferMilliseconds, allowsPictureInPicture: state.pictureInPicture).id(activeChannel.id) } else { Color.black; Image(systemName: "play.rectangle").font(.largeTitle).foregroundStyle(.white.opacity(0.3)) }; Text("LIVE").font(.caption.bold()).foregroundStyle(state.accent).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 14)).overlay(RoundedRectangle(cornerRadius: 14).stroke(state.accent.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
             Picker("", selection: $mode) { Text(state.localized("订阅")).tag("订阅"); Text(state.localized("频道")).tag("频道"); Text(state.localized("节目")).tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18)
             HStack { Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.5)); TextField(state.localized("搜索频道..."), text: $search); Spacer(); Image(systemName: "line.3.horizontal.decrease.circle").foregroundStyle(state.accent) }.padding(14).background(Color.panel, in: RoundedRectangle(cornerRadius: 11)).padding(.horizontal, 18)
-            ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in Button { state.play(item) } label: { HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text(item.group).font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == channel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == channel.id ? state.accent : .white.opacity(0.4)) }.padding(10).background(item.id == channel.id ? state.accent.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }.buttonStyle(.plain) }
+            ForEach(state.channels.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { item in Button { activeChannel = item; state.play(item) } label: { HStack { RoundedRectangle(cornerRadius: 8).fill(Color.panel).frame(width: 76, height: 56).overlay(Image(systemName: "tv").foregroundStyle(.white.opacity(0.45))); VStack(alignment: .leading) { Text(item.name).font(.headline); Text(item.group).font(.caption).foregroundStyle(.white.opacity(0.45)) }; Spacer(); Image(systemName: item.id == activeChannel.id ? "play.circle.fill" : "play.circle").font(.title2).foregroundStyle(item.id == activeChannel.id ? state.accent : .white.opacity(0.4)) }.padding(10).background(item.id == activeChannel.id ? state.accent.opacity(0.12) : Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16) }.buttonStyle(.plain) }
             Spacer(minLength: 110)
         } } }
-        .onAppear { if state.selectedChannel?.id != channel.id { state.play(channel) } }
+        .onAppear { if state.selectedChannel?.id != activeChannel.id { state.play(activeChannel) } }
         .alert(state.localized("编码信息"), isPresented: $showInfo) { Button(state.localized("关闭"), role: .cancel) {} } message: { Text(state.localized("暂无数据")) }
     }
 }
