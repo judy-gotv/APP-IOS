@@ -18,9 +18,13 @@ final class AppState: ObservableObject {
     @Published var colorTheme: String
     @Published var preferredPlayer: PreferredPlayer
     @Published var networkBufferMilliseconds: Double
+    @Published var gridLayout: GridLayout
+    @Published var pictureInPicture: Bool
     let player = StreamPlayer()
 
-    private let storageKey = "nanostream.state.v3"
+    // v4 intentionally starts with no bundled/demo channels. Existing installs
+    // using the old demo state are migrated to a clean, user-owned library.
+    private let storageKey = "nanostream.state.v4"
 
     init() {
         if let saved = Self.restore(key: storageKey) {
@@ -39,6 +43,8 @@ final class AppState: ObservableObject {
         colorTheme = UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "剧毒绿"
         preferredPlayer = PreferredPlayer(rawValue: UserDefaults.standard.string(forKey: "nanostream.player") ?? "KSPlayer") ?? .ksPlayer
         networkBufferMilliseconds = UserDefaults.standard.object(forKey: "nanostream.buffer") as? Double ?? 3000
+        gridLayout = GridLayout(rawValue: UserDefaults.standard.string(forKey: "nanostream.grid") ?? GridLayout.twoColumns.rawValue) ?? .twoColumns
+        pictureInPicture = UserDefaults.standard.object(forKey: "nanostream.pip") as? Bool ?? true
     }
 
     var groups: [String] { ["全部"] + Array(Set(channels.map(\.group))).sorted() }
@@ -75,9 +81,24 @@ final class AppState: ObservableObject {
     func setColorTheme(_ value: String) { colorTheme = value; UserDefaults.standard.set(value, forKey: "nanostream.colorTheme") }
     func setPreferredPlayer(_ value: PreferredPlayer) { preferredPlayer = value; UserDefaults.standard.set(value.rawValue, forKey: "nanostream.player") }
     func setBuffer(_ value: Double) { networkBufferMilliseconds = value; UserDefaults.standard.set(value, forKey: "nanostream.buffer") }
+    func setGridLayout(_ value: GridLayout) { gridLayout = value; UserDefaults.standard.set(value.rawValue, forKey: "nanostream.grid") }
+    func setPictureInPicture(_ value: Bool) { pictureInPicture = value; UserDefaults.standard.set(value, forKey: "nanostream.pip") }
     func localized(_ key: String) -> String {
         guard language != "中文" else { return key }
-        let table: [String: (String, String)] = ["设置": ("Settings", "Cài đặt"), "播放列表": ("Playlists", "Danh sách phát"), "收藏": ("Favorites", "Yêu thích"), "主页": ("Home", "Trang chủ")]
+        let table: [String: (String, String)] = [
+            "设置": ("Settings", "Cài đặt"), "播放列表": ("Playlists", "Danh sách phát"), "收藏": ("Favorites", "Yêu thích"), "主页": ("Home", "Trang chủ"),
+            "全部": ("All", "Tất cả"), "搜索频道...": ("Search channels...", "Tìm kênh..."), "最近播放": ("Recently played", "Đã phát gần đây"),
+            "暂无播放记录": ("No playback history", "Chưa có lịch sử phát"), "暂无频道": ("No channels", "Chưa có kênh"),
+            "请先在“播放列表”中添加 M3U 或 Xtream 来源。": ("Add an M3U or Xtream source in Playlists first.", "Hãy thêm nguồn M3U hoặc Xtream trong Danh sách phát."),
+            "无收藏频道": ("No favorite channels", "Chưa có kênh yêu thích"), "用星号标记频道以便在此快速访问。": ("Star a channel to access it here.", "Đánh dấu sao để truy cập nhanh tại đây."),
+            "暂无播放列表": ("No playlists", "Chưa có danh sách phát"), "添加播放列表": ("Add playlist", "Thêm danh sách phát"), "关闭": ("Close", "Đóng"),
+            "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"),
+            "编码信息": ("Stream information", "Thông tin luồng"), "暂无数据": ("Unavailable", "Không có dữ liệu"), "播放失败，请检查频道地址。": ("Playback failed. Check the channel URL.", "Phát không thành công. Hãy kiểm tra URL kênh."),
+            "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"),
+            "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"),
+            "网络缓存大小": ("Network buffer", "Bộ đệm mạng"), "清除图片缓存": ("Clear image cache", "Xóa bộ nhớ ảnh"), "清除播放历史": ("Clear playback history", "Xóa lịch sử phát"), "选择本地 M3U 文件": ("Choose local M3U file", "Chọn tệp M3U cục bộ"), "输入列表名称": ("Playlist name", "Tên danh sách phát"), "详细信息": ("Details", "Chi tiết"), "播放列表来源": ("Playlist source", "Nguồn danh sách phát"), "添加列表": ("Add playlist", "Thêm danh sách phát"),
+            "2列": ("2 columns", "2 cột"), "4列": ("4 columns", "4 cột")
+        ]
         return language == "English" ? (table[key]?.0 ?? key) : (table[key]?.1 ?? key)
     }
 
@@ -91,7 +112,6 @@ final class AppState: ObservableObject {
         recent.removeAll { $0 == channel.id }
         recent.insert(channel.id, at: 0)
         recent = Array(recent.prefix(24))
-        player.play(channel: channel, bufferMilliseconds: networkBufferMilliseconds)
         save()
     }
 
@@ -170,6 +190,13 @@ enum PreferredPlayer: String, CaseIterable, Identifiable {
     case avPlayer = "AVPlayer"
     case ksPlayer = "KSPlayer"
     var id: String { rawValue }
+}
+
+enum GridLayout: String, CaseIterable, Identifiable {
+    case twoColumns = "2列"
+    case fourColumns = "4列"
+    var id: String { rawValue }
+    var columns: Int { self == .twoColumns ? 2 : 4 }
 }
 
 @MainActor

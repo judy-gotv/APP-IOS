@@ -6,45 +6,40 @@ struct SettingsView: View {
     @AppStorage("subtitleFontSize") private var subtitleFontSize = 18.0
     @AppStorage("httpProxy") private var httpProxy = ""
     @AppStorage("userAgent") private var userAgent = "Mozilla/5.0 (AppleTV; CPU OS 17_0 like Mac..."
-    @State private var pictureInPicture = true
-    @State private var hardwareAcceleration = true
-    @State private var autoAudio = true
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 14) {
                 Text(state.localized("设置")).font(.system(size: 22, weight: .bold)).padding(.top, 52)
-                SettingsSection(title: "语言", icon: "globe") {
-                    SettingsPickerRow(title: "语言", value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: ["English", "Tiếng Việt", "中文"])
+                SettingsSection(title: state.localized("语言"), icon: "globe") {
+                    SettingsPickerRow(title: state.localized("语言"), value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: ["English", "Tiếng Việt", "中文"])
                 }
-                SettingsSection(title: "外观", icon: "paintbrush") {
-                    SettingsPickerRow(title: "主题模式", value: Binding(get: { state.themeMode }, set: { state.setTheme($0) }), options: ["System", "Light", "Dark"])
-                    SettingsPickerRow(title: "色彩主题", value: Binding(get: { state.colorTheme }, set: { state.setColorTheme($0) }), options: ["Cyberpunk", "落日金", "剧毒绿", "霓虹粉", "深海蓝"])
+                SettingsSection(title: state.localized("外观"), icon: "paintbrush") {
+                    SettingsPickerRow(title: state.localized("主题模式"), value: Binding(get: { state.themeMode }, set: { state.setTheme($0) }), options: ["System", "Light", "Dark"])
+                    SettingsPickerRow(title: state.localized("色彩主题"), value: Binding(get: { state.colorTheme }, set: { state.setColorTheme($0) }), options: ["Cyberpunk", "落日金", "剧毒绿", "霓虹粉", "深海蓝"])
                 }
-                SettingsSection(title: "播放设置", icon: "play.circle") {
-                    ToggleRow(title: "画中画", value: $pictureInPicture)
-                    ToggleRow(title: "硬件加速", value: $hardwareAcceleration)
-                    ToggleRow(title: "自动选择音轨", value: $autoAudio)
+                SettingsSection(title: state.localized("播放设置"), icon: "play.circle") {
+                    ToggleRow(title: state.localized("画中画"), value: Binding(get: { state.pictureInPicture }, set: { state.setPictureInPicture($0) }))
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("首选播放器").font(.system(size: 18))
+                        Text(state.localized("首选播放器")).font(.system(size: 18))
                         Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
-                        Text("Dùng KSPlayer (FFmpeg) riêng cho IPTV. Tương thích hầu hết mọi định dạng stream.").font(.caption).foregroundStyle(.white.opacity(0.5))
+                        Text(state.preferredPlayer == .avPlayer ? "AVPlayer 使用系统原生解码。" : state.preferredPlayer == .ksPlayer ? "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。" : "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。").font(.caption).foregroundStyle(.white.opacity(0.5))
                     }.padding(.vertical, 8)
-                    HStack { Text("字幕大小  \(Int(subtitleFontSize)) pt").font(.system(size: 18)); Spacer(); Stepper("", value: $subtitleFontSize, in: 12...40, step: 1).labelsHidden() }
+                    HStack { Text("\(state.localized("字幕大小"))  \(Int(subtitleFontSize)) pt").font(.system(size: 18)); Spacer(); Stepper("", value: $subtitleFontSize, in: 12...40, step: 1).labelsHidden() }
                 }
-                SettingsSection(title: "网络", icon: "globe.americas") {
+                SettingsSection(title: state.localized("网络"), icon: "globe.americas") {
                     LabeledField(title: "User-Agent", text: $userAgent)
                     LabeledField(title: "HTTP Proxy", text: $httpProxy, placeholder: "HTTP Proxy")
                 }
-                SettingsSection(title: "缓冲区", icon: "memorychip") {
-                    HStack { Text("网络缓存大小").font(.system(size: 18)); Spacer(); Text("\(Int(state.networkBufferMilliseconds)) ms").font(.system(size: 18, design: .monospaced)).foregroundStyle(state.accent) }
+                SettingsSection(title: state.localized("缓冲区"), icon: "memorychip") {
+                    HStack { Text(state.localized("网络缓存大小")).font(.system(size: 18)); Spacer(); Text("\(Int(state.networkBufferMilliseconds)) ms").font(.system(size: 18, design: .monospaced)).foregroundStyle(state.accent) }
                     Slider(value: Binding(get: { state.networkBufferMilliseconds }, set: { state.setBuffer($0) }), in: 0...10000, step: 250).tint(state.accent)
-                    Text("网络连接较慢或不稳定时，可增加缓存").font(.caption).foregroundStyle(.white.opacity(0.5))
+                    Text(state.language == "中文" ? "网络连接较慢或不稳定时，可增加缓存" : "Increase the buffer for slow or unstable connections.").font(.caption).foregroundStyle(.white.opacity(0.5))
                 }
-                SettingsSection(title: "数据与缓存", icon: "externaldrive") {
-                    ActionRow(title: "清除图片缓存", icon: "trash") { state.clearImageCache() }
-                    ActionRow(title: "清除播放历史", icon: "clock.badge.xmark") { state.clearHistory() }
+                SettingsSection(title: state.localized("数据与缓存"), icon: "externaldrive") {
+                    ActionRow(title: state.localized("清除图片缓存"), icon: "trash") { state.clearImageCache() }
+                    ActionRow(title: state.localized("清除播放历史"), icon: "clock.badge.xmark") { state.clearHistory() }
                 }
-                Text("NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。").font(.caption).foregroundStyle(.white.opacity(0.45)).multilineTextAlignment(.leading).padding(.horizontal, 22).padding(.bottom, 120)
+                Text(state.language == "中文" ? "NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。" : "NanoStream is a media player shell. Only add playlists and streams you are authorized to watch.").font(.caption).foregroundStyle(.white.opacity(0.45)).multilineTextAlignment(.leading).padding(.horizontal, 22).padding(.bottom, 120)
             }
         }
     }
@@ -75,33 +70,35 @@ struct PlaylistFormView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("添加播放列表")
+                    Text(state.localized("添加播放列表"))
                         .font(.system(size: 24, weight: .bold))
                         .padding(.top, 8)
-                    Text("播放列表来源")
+                    Text(state.localized("播放列表来源"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.neon)
                     SourcePicker(source: $source, chooseFile: { showFileImporter = true })
-                    Text("详细信息")
+                    Text(state.localized("详细信息"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.neon)
-                    TextField("输入列表名称", text: $name)
+                    TextField(state.localized("输入列表名称"), text: $name)
                         .fieldStyle()
                     if source == "Xtream" {
-                        TextField("服务器地址 (http://...)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
-                        TextField("用户名", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
-                        SecureField("密码", text: $password).fieldStyle()
+                        TextField(state.language == "中文" ? "服务器地址 (http://...)" : "Server URL (http://...)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
+                        TextField(state.language == "中文" ? "用户名" : "Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
+                        SecureField(state.language == "中文" ? "密码" : "Password", text: $password).fieldStyle()
                     } else if source == "M3U 链接" {
                         TextField("URL (http://...)", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().fieldStyle()
                     } else {
-                        Button { showFileImporter = true } label: { Label(url.isEmpty ? "选择本地 M3U 文件" : url, systemImage: "doc.badge.plus").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).fieldStyle()
+                        Button { showFileImporter = true } label: { Label(url.isEmpty ? state.localized("选择本地 M3U 文件") : url, systemImage: "doc.badge.plus").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).fieldStyle()
                     }
-                    AddPlaylistButton(name: name, source: source, url: url, username: username, password: password, isSaving: isSaving) {
+                    if source != "本地文件" {
+                    AddPlaylistButton(name: name, source: source, url: url, username: username, password: password, isSaving: isSaving, title: state.localized("添加列表")) {
                         isSaving = true
                         state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url, username: username, password: password) { success in
                             isSaving = false
                             if success { dismiss() } else { errorText = state.playlistError ?? "播放列表添加失败。" }
                         }
+                    }
                     }
                     if let errorText { Text(errorText).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                 }
@@ -110,7 +107,7 @@ struct PlaylistFormView: View {
             .background(Color.appBackground)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
+                    Button(state.localized("关闭")) { dismiss() }
                 }
             }
         }
@@ -128,6 +125,7 @@ struct PlaylistFormView: View {
 }
 
 struct SourcePicker: View {
+    @EnvironmentObject private var state: AppState
     @Binding var source: String
     let chooseFile: () -> Void
     private let options = ["本地文件", "M3U 链接", "Xtream"]
@@ -138,7 +136,7 @@ struct SourcePicker: View {
                 Button { if item == "本地文件" { chooseFile() } else { source = item } } label: {
                     VStack(spacing: 8) {
                         Image(systemName: icon(for: item)).font(.title2)
-                        Text(item).font(.caption)
+                        Text(displayName(for: item)).font(.caption)
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: 82)
@@ -154,6 +152,14 @@ struct SourcePicker: View {
     private func icon(for item: String) -> String {
         switch item { case "本地文件": return "doc"; case "M3U 链接": return "link"; default: return "server.rack" }
     }
+
+    private func displayName(for item: String) -> String {
+        switch item {
+        case "本地文件": return state.language == "中文" ? item : "Local file"
+        case "M3U 链接": return state.language == "中文" ? item : "M3U link"
+        default: return item
+        }
+    }
 }
 
 struct AddPlaylistButton: View {
@@ -163,14 +169,16 @@ struct AddPlaylistButton: View {
     let username: String
     let password: String
     let isSaving: Bool
+    let title: String
     let action: () -> Void
 
     var body: some View {
-        Button("添加列表", action: action)
+        Button(title, action: action)
             .font(.headline)
             .foregroundStyle(!isValid || isSaving ? .white.opacity(0.35) : Color.appBackground)
             .frame(maxWidth: .infinity)
             .frame(height: 56)
+            .contentShape(Rectangle())
             .background(!isValid || isSaving ? Color.panel : Color.neon, in: RoundedRectangle(cornerRadius: 14))
             .disabled(!isValid || isSaving)
     }

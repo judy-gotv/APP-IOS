@@ -8,7 +8,6 @@ struct NanoStreamCloneApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
-                .preferredColorScheme(.dark)
         }
     }
 }

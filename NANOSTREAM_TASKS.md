@@ -8,7 +8,11 @@
 - [x] 收藏与播放历史持久化、清空操作。
 - [x] AVPlayer / KSPlayer / Auto 三选一并保存。
 - [x] 网络缓存滑杆接入 AVPlayer/KSPlayer。
+- [x] 稳定 AVPlayer 生命周期，Auto 在失败后切换 KSPlayer。
+- [x] AVPlayerViewController 原生画中画能力按设置启用。
 - [x] 语言选择持久化并更新导航文字。
+- [x] 首页左上角分类菜单与真实分组筛选。
+- [x] 首页网格布局切换（2列 / 4列）。
 - [x] System/Light/Dark 主题选择。
 - [x] Cyberpunk/落日金/剧毒绿/霓虹粉/深海蓝色彩主题。
 - [x] GitHub macOS Runner 编译、KSPlayer/FFmpeg 依赖和标准 IPA 封装。
