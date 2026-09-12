@@ -225,19 +225,24 @@ struct PlayerSurface: View {
         self.engine = engine
         self.bufferMilliseconds = bufferMilliseconds
         self.allowsPictureInPicture = allowsPictureInPicture
-        _session = StateObject(wrappedValue: PlayerSession(url: url, title: title, bufferMilliseconds: bufferMilliseconds))
+        _session = StateObject(wrappedValue: PlayerSession(url: url, bufferMilliseconds: bufferMilliseconds, autoplay: engine != .ksPlayer))
     }
 
     var body: some View {
-        switch engine {
-        case .ksPlayer:
-            KSVideoPlayerView(url: url, options: ksOptions, title: title)
-        case .avPlayer:
-            AVPlayerContainer(player: session.player, allowsPictureInPicture: allowsPictureInPicture)
-        case .auto:
-            if session.didFail { KSVideoPlayerView(url: url, options: ksOptions, title: title) }
-            else { AVPlayerContainer(player: session.player, allowsPictureInPicture: allowsPictureInPicture) }
+        Group {
+            switch engine {
+            case .ksPlayer:
+                KSVideoPlayerView(url: url, options: ksOptions, title: title)
+            case .avPlayer:
+                AVPlayerContainer(player: session.player, allowsPictureInPicture: allowsPictureInPicture)
+            case .auto:
+                if session.didFail { KSVideoPlayerView(url: url, options: ksOptions, title: title) }
+                else { AVPlayerContainer(player: session.player, allowsPictureInPicture: allowsPictureInPicture) }
+            }
         }
+        .onAppear { session.setActive(engine != .ksPlayer && !session.didFail) }
+        .onChange(of: engine) { newEngine in session.setActive(newEngine != .ksPlayer && !session.didFail) }
+        .onDisappear { session.stop() }
     }
 
     private var ksOptions: KSOptions {
@@ -254,16 +259,26 @@ final class PlayerSession: ObservableObject {
     @Published var didFail = false
     private var observation: NSKeyValueObservation?
 
-    init(url: URL, title: String, bufferMilliseconds: Double) {
+    init(url: URL, bufferMilliseconds: Double, autoplay: Bool) {
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = max(bufferMilliseconds / 1000, 0)
         player = AVPlayer(playerItem: item)
         observation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
-            Task { @MainActor [weak self] in self?.didFail = true }
+            Task { @MainActor [weak self] in
+                self?.player.pause()
+                self?.didFail = true
+            }
         }
+        if autoplay { player.play() }
+    }
+
+    func setActive(_ active: Bool) {
+        guard active, !didFail else { player.pause(); return }
         player.play()
     }
+
+    func stop() { player.pause() }
 
     deinit { observation?.invalidate(); player.pause() }
 }
