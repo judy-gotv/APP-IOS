@@ -367,7 +367,7 @@ struct PlayerSurface: View {
         case .ksPlayer:
             KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
         case .avPlayer, .auto:
-            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
+            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
         }
     }
 }
@@ -448,7 +448,7 @@ private struct KSCompactPlayerView: View {
                 .onTapGesture { controlsVisible ? hideControls() : revealControls() }
             if isBuffering { ProgressView().tint(.white).controlSize(.large) }
             if controlsVisible {
-                PlaybackControlBar(accent: Color.neon, isPlaying: isPlaying, isMuted: coordinator.isMuted, showsPiP: allowsPictureInPicture, showsProjection: true, onPlayPause: togglePlay, onMute: toggleMute, onPiP: togglePiP)
+                PlaybackControlBar(accent: Color.neon, isPlaying: isPlaying, isMuted: coordinator.isMuted, showsPiP: allowsPictureInPicture, showsProjection: false, onPlayPause: togglePlay, onMute: toggleMute, onPiP: togglePiP)
                     .transition(.opacity)
             }
         }
@@ -524,15 +524,17 @@ private struct AdaptiveAVPlayerView: View {
     let title: String
     let bufferMilliseconds: Double
     let allowsPictureInPicture: Bool
+    let hardwareAcceleration: Bool
     let automaticAudioSelection: Bool
     @Binding var streamInfo: String
     @StateObject private var session: AVPlaybackSession
 
-    init(url: URL, title: String, bufferMilliseconds: Double, allowsPictureInPicture: Bool, automaticAudioSelection: Bool, streamInfo: Binding<String>) {
+    init(url: URL, title: String, bufferMilliseconds: Double, allowsPictureInPicture: Bool, hardwareAcceleration: Bool, automaticAudioSelection: Bool, streamInfo: Binding<String>) {
         self.url = url
         self.title = title
         self.bufferMilliseconds = bufferMilliseconds
         self.allowsPictureInPicture = allowsPictureInPicture
+        self.hardwareAcceleration = hardwareAcceleration
         self.automaticAudioSelection = automaticAudioSelection
         _streamInfo = streamInfo
         _session = StateObject(wrappedValue: AVPlaybackSession(url: url, bufferMilliseconds: bufferMilliseconds, automaticAudioSelection: automaticAudioSelection))
@@ -541,7 +543,7 @@ private struct AdaptiveAVPlayerView: View {
     var body: some View {
         ZStack {
             if session.didFail {
-                KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: true, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
+                KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
             } else {
                 AVPlayerLayerView(session: session)
             }
@@ -620,7 +622,7 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
                 case .readyToPlay:
                     self.didFail = false
                     self.isBuffering = false
-                    if self.automaticAudioSelection { self.selectAudioTrack(on: item) }
+                    if self.automaticAudioSelection { await self.selectAudioTrack(on: item) }
                     self.loadStreamInfo(for: item)
                     self.scheduleVideoCheck(for: item)
                 case .failed:
@@ -677,8 +679,8 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
         if pipController.isPictureInPictureActive { pipController.stopPictureInPicture() } else { pipController.startPictureInPicture() }
     }
 
-    private func selectAudioTrack(on item: AVPlayerItem) {
-        guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible) else { return }
+    private func selectAudioTrack(on item: AVPlayerItem) async {
+        guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
         let option = group.defaultOption ?? group.options.first
         if let option { item.select(option, in: group) }
     }
