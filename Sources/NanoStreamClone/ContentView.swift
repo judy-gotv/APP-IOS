@@ -210,18 +210,35 @@ struct ChannelDetailView: View {
     }
 
     var body: some View {
-        ZStack { Color.appBackground.ignoresSafeArea(); ScrollView(showsIndicators: false) { VStack(spacing: 14) {
-            HStack { Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain); Text(activeChannel.name).font(.headline).lineLimit(1); Spacer(); Button { showInfo = true } label: { Image(systemName: "info.circle") }.buttonStyle(.plain); Button { state.toggleFavorite(activeChannel) } label: { Image(systemName: state.favorites.contains(activeChannel.id) ? "star.fill" : "star") }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.top, 12)
-            ZStack(alignment: .bottomLeading) { if playerReady, let url = activeChannel.streamURL { PlayerSurface(url: url, title: activeChannel.name, engine: state.preferredPlayer, bufferMilliseconds: state.networkBufferMilliseconds, allowsPictureInPicture: state.pictureInPicture, streamInfo: $streamInfo).id(activeChannel.id) } else { Color.black; ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity) }; Text("LIVE").font(.caption.bold()).foregroundStyle(state.accent).padding(8) }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(state.accent.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
-            Picker("", selection: $mode) { Text(state.localized("订阅")).tag("订阅"); Text(state.localized("频道")).tag("频道"); Text(state.localized("节目")).tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18)
-            detailContent
-            Spacer(minLength: 110)
-        } } }
+        ZStack {
+            Color.appBackground.ignoresSafeArea()
+            VStack(spacing: 0) {
+                HStack {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left").font(.title3).frame(width: 44, height: 44).background(Color.panel, in: Circle()) }.buttonStyle(.plain)
+                    Text(activeChannel.name).font(.headline).lineLimit(1)
+                    Spacer()
+                    Button { showInfo = true } label: { Image(systemName: "info.circle").font(.title3).frame(width: 44, height: 44) }.buttonStyle(.plain)
+                    Button { state.toggleFavorite(activeChannel) } label: { Image(systemName: state.favorites.contains(activeChannel.id) ? "star.fill" : "star").font(.title3).frame(width: 44, height: 44) }.buttonStyle(.plain)
+                }.padding(.horizontal, 18).padding(.top, 8)
+                ZStack(alignment: .bottomLeading) {
+                    if playerReady, let url = activeChannel.streamURL {
+                        PlayerSurface(url: url, title: activeChannel.name, engine: state.preferredPlayer, bufferMilliseconds: state.networkBufferMilliseconds, allowsPictureInPicture: state.pictureInPicture, hardwareAcceleration: state.hardwareAcceleration, automaticAudioSelection: state.automaticAudioSelection, streamInfo: $streamInfo).id(activeChannel.id)
+                    } else {
+                        Color.black
+                        ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    Text("LIVE").font(.caption.bold()).foregroundStyle(state.accent).padding(8)
+                }.frame(height: 220).clipShape(RoundedRectangle(cornerRadius: 8)).overlay(RoundedRectangle(cornerRadius: 8).stroke(state.accent.opacity(0.7), lineWidth: 1)).padding(.horizontal, 16)
+                Picker("", selection: $mode) { Text(state.localized("订阅")).tag("订阅"); Text(state.localized("频道")).tag("频道"); Text(state.localized("节目")).tag("节目") }.pickerStyle(.segmented).padding(.horizontal, 18).padding(.vertical, 12)
+                ScrollView(showsIndicators: false) {
+                    detailContent
+                        .padding(.bottom, 110)
+                }
+            }
+        }
         .onAppear {
             if state.selectedChannel?.id != activeChannel.id { state.play(activeChannel) }
-            loadStreamInfo(for: activeChannel)
         }
-        .onChange(of: activeChannel.id) { _ in loadStreamInfo(for: activeChannel) }
         .alert(state.localized("编码信息"), isPresented: $showInfo) { Button(state.localized("关闭"), role: .cancel) {} } message: { Text(streamInfo.isEmpty ? state.localized("暂无数据") : streamInfo) }
     }
 
@@ -253,7 +270,7 @@ struct ChannelDetailView: View {
             }
             if let error = state.playlistError { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal, 20) }
         case "节目":
-            Text(state.localized("暂无节目数据")).foregroundStyle(.white.opacity(0.5)).padding(.top, 26)
+            EPGProgramList(channel: activeChannel)
         default:
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.5))
@@ -291,26 +308,45 @@ struct ChannelDetailView: View {
         .padding(.horizontal, 18)
     }
 
-    private func loadStreamInfo(for channel: Channel) {
-        guard let url = channel.streamURL else { streamInfo = ""; return }
-        streamInfo = ""
-        Task {
-            let asset = AVURLAsset(url: url)
-            do {
-                let tracks = try await asset.load(.tracks)
-                let video = tracks.first { $0.mediaType == .video }
-                let audio = tracks.first { $0.mediaType == .audio }
-                var lines: [String] = ["URL  \(url.absoluteString)"]
-                if let video {
-                    let size = try await video.load(.naturalSize)
-                    let fps = try await video.load(.nominalFrameRate)
-                    if size.width > 0 && size.height > 0 { lines.append("Video  \(Int(size.width)) × \(Int(size.height))") }
-                    if fps > 0 { lines.append(String(format: "Frame rate  %.2f fps", fps)) }
+}
+
+private struct EPGProgramList: View {
+    @EnvironmentObject private var state: AppState
+    let channel: Channel
+    private let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    var body: some View {
+        let programs = state.programs(for: channel)
+        Group {
+            if state.isLoadingEPG {
+                ProgressView().tint(state.accent).padding(.top, 26)
+            } else if let error = state.epgError {
+                VStack(spacing: 8) {
+                    Text(error).font(.subheadline).foregroundStyle(.red).multilineTextAlignment(.center)
+                    Button(state.localized("刷新节目单")) { state.reloadEPG() }.buttonStyle(.borderedProminent).tint(state.accent)
+                }.padding(.horizontal, 20).padding(.top, 20)
+            } else if programs.isEmpty {
+                Text(state.localized("暂无节目数据")).foregroundStyle(.white.opacity(0.5)).padding(.top, 26)
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(programs) { program in
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("\(timeFormatter.string(from: program.start))–\(timeFormatter.string(from: program.end))").font(.caption.monospacedDigit()).foregroundStyle(state.accent)
+                                Text(program.title).font(.headline).lineLimit(2)
+                                Spacer()
+                            }
+                            if let subtitle = program.subtitle { Text(subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.66)).lineLimit(2) }
+                            if let description = program.programDescription { Text(description).font(.caption).foregroundStyle(.white.opacity(0.5)).lineLimit(3) }
+                            ProgressView(value: program.progress).tint(state.accent)
+                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Color.card, in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 16)
+                    }
                 }
-                if audio != nil { lines.append("Audio  ✓") }
-                await MainActor.run { streamInfo = lines.joined(separator: "\n") }
-            } catch {
-                await MainActor.run { streamInfo = "URL  \(url.absoluteString)" }
             }
         }
     }
@@ -322,22 +358,73 @@ struct PlayerSurface: View {
     let engine: PreferredPlayer
     let bufferMilliseconds: Double
     let allowsPictureInPicture: Bool
+    let hardwareAcceleration: Bool
+    let automaticAudioSelection: Bool
     @Binding var streamInfo: String
 
     var body: some View {
         switch engine {
         case .ksPlayer:
-            KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, streamInfo: $streamInfo)
+            KSCompactPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
         case .avPlayer, .auto:
-            AdaptiveAVPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, streamInfo: $streamInfo)
+            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
         }
     }
 }
 
-struct KSCompactPlayerView: View {
+private struct PlaybackControlBar: View {
+    let accent: Color
+    let isPlaying: Bool
+    let isMuted: Bool
+    let showsPiP: Bool
+    let showsProjection: Bool
+    let onPlayPause: () -> Void
+    let onMute: () -> Void
+    let onPiP: () -> Void
+
+    var body: some View {
+        HStack(spacing: 18) {
+            controlButton(icon: isPlaying ? "pause.fill" : "play.fill", prominent: true, action: onPlayPause)
+            controlButton(icon: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill", action: onMute)
+            if showsPiP { controlButton(icon: "rectangle.on.rectangle", action: onPiP) }
+            if showsProjection { AirPlayButton() }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+    }
+
+    private func controlButton(icon: String, prominent: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: prominent ? 21 : 17, weight: .semibold))
+                .frame(width: prominent ? 44 : 40, height: prominent ? 44 : 40)
+                .foregroundStyle(.white)
+                .background(prominent ? accent.opacity(0.84) : .clear, in: Circle())
+                .contentShape(Circle())
+        }.buttonStyle(.plain)
+    }
+}
+
+private struct AirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.tintColor = .white
+        view.activeTintColor = .white
+        view.prioritizesVideoDevices = true
+        return view
+    }
+
+    func updateUIView(_ view: AVRoutePickerView, context: Context) {}
+}
+
+private struct KSCompactPlayerView: View {
     let url: URL
+    let title: String
     let bufferMilliseconds: Double
     let allowsPictureInPicture: Bool
+    let hardwareAcceleration: Bool
+    let automaticAudioSelection: Bool
     @Binding var streamInfo: String
     @StateObject private var coordinator = KSVideoPlayer.Coordinator()
     @State private var controlsVisible = true
@@ -348,34 +435,22 @@ struct KSCompactPlayerView: View {
     var body: some View {
         ZStack {
             Color.black
-            KSVideoPlayer(coordinator: coordinator, url: url, options: options)
-                .onStateChanged { layer, state in
-                    isPlaying = state.isPlaying
-                    isBuffering = state == .preparing || state == .buffering
-                    if state == .readyToPlay || state == .bufferFinished { updateStreamInfo(from: layer) }
+            KSVideoPlayer(coordinator: coordinator, url: url, options: options, title: title)
+                .onStateChanged { layer, playerState in
+                    isPlaying = playerState.isPlaying
+                    isBuffering = playerState == .preparing || playerState == .buffering
+                    if playerState == .readyToPlay || playerState == .bufferFinished {
+                        if automaticAudioSelection { selectFirstAudio(on: layer) }
+                        updateStreamInfo(from: layer)
+                    }
                 }
                 .onFinish { _, _ in isPlaying = false; controlsVisible = true }
                 .contentShape(Rectangle())
                 .onTapGesture { controlsVisible ? hideControls() : revealControls() }
             if isBuffering { ProgressView().tint(.white).controlSize(.large) }
             if controlsVisible {
-                HStack(spacing: 24) {
-                    compactPlayerButton(icon: coordinator.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
-                        coordinator.isMuted.toggle(); revealControls()
-                    }
-                    compactPlayerButton(icon: isPlaying ? "pause.fill" : "play.fill", prominent: true) {
-                        if isPlaying { coordinator.playerLayer?.pause() } else { coordinator.playerLayer?.play() }
-                        revealControls()
-                    }
-                    if allowsPictureInPicture {
-                        compactPlayerButton(icon: "pip.enter") {
-                            coordinator.playerLayer?.isPipActive.toggle(); revealControls()
-                        }
-                    }
-                }
-                .padding(.horizontal, 18).padding(.vertical, 10)
-                .background(.ultraThinMaterial, in: Capsule())
-                .transition(.opacity)
+                PlaybackControlBar(accent: Color.neon, isPlaying: isPlaying, isMuted: coordinator.isMuted, showsPiP: allowsPictureInPicture, showsProjection: true, onPlayPause: togglePlay, onMute: toggleMute, onPiP: togglePiP)
+                    .transition(.opacity)
             }
         }
         .onAppear { revealControls() }
@@ -383,18 +458,25 @@ struct KSCompactPlayerView: View {
     }
 
     private var options: KSOptions {
-        let options = KSOptions()
+        let options = ConfiguredKSOptions(automaticAudioSelection: automaticAudioSelection)
         options.preferredForwardBufferDuration = max(bufferMilliseconds / 1000, 0)
+        options.hardwareDecode = hardwareAcceleration
         options.canStartPictureInPictureAutomaticallyFromInline = allowsPictureInPicture
+        options.registerRemoteControll = true
         return options
     }
 
-    private func compactPlayerButton(icon: String, prominent: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: prominent ? 23 : 18, weight: .semibold))
-                .frame(width: prominent ? 48 : 40, height: prominent ? 48 : 40)
-                .foregroundStyle(.white).background(prominent ? Color.white.opacity(0.25) : Color.clear, in: Circle())
-        }.buttonStyle(.plain)
+    private func togglePlay() {
+        if isPlaying { coordinator.playerLayer?.pause() } else { coordinator.playerLayer?.play() }
+        revealControls()
+    }
+
+    private func toggleMute() { coordinator.isMuted.toggle(); revealControls() }
+    private func togglePiP() { coordinator.playerLayer?.isPipActive.toggle(); revealControls() }
+
+    private func selectFirstAudio(on layer: KSPlayerLayer) {
+        guard let track = layer.player.tracks(mediaType: .audio).first else { return }
+        if !track.isEnabled { layer.player.select(track: track) }
     }
 
     private func revealControls() {
@@ -406,122 +488,265 @@ struct KSCompactPlayerView: View {
         }
     }
 
-    private func hideControls() {
-        hideToken = UUID()
-        withAnimation(.easeOut(duration: 0.15)) { controlsVisible = false }
-    }
+    private func hideControls() { hideToken = UUID(); withAnimation(.easeOut(duration: 0.15)) { controlsVisible = false } }
 
     private func updateStreamInfo(from layer: KSPlayerLayer) {
         let player = layer.player
         var lines: [String] = ["Engine  KSPlayer"]
         let videoTracks = player.tracks(mediaType: .video)
         let audioTracks = player.tracks(mediaType: .audio)
-        if let video = videoTracks.first(where: { $0.isEnabled }) ?? videoTracks.first { lines.append("Video  \(video.description)") }
-        if let audio = audioTracks.first(where: { $0.isEnabled }) ?? audioTracks.first { lines.append("Audio  \(audio.description)") }
-        let size = player.naturalSize
-        if size.width > 0 && size.height > 0, !lines.contains(where: { $0.contains("\(Int(size.width))x\(Int(size.height))") }) {
-            lines.append("Resolution  \(Int(size.width)) × \(Int(size.height))")
+        if let video = videoTracks.first(where: { $0.isEnabled }) ?? videoTracks.first {
+            lines.append("Video  \(video.name)")
+            if video.nominalFrameRate > 0 { lines.append(String(format: "Frame rate  %.2f fps", video.nominalFrameRate)) }
+            if video.bitRate > 0 { lines.append("Bit rate  \(Int(video.bitRate / 1000)) kbps") }
+            lines.append("Codec  \(video.description)")
         }
+        if let audio = audioTracks.first(where: { $0.isEnabled }) ?? audioTracks.first { lines.append("Audio  \(audio.name)") }
+        let size = player.naturalSize
+        if size.width > 0 && size.height > 0 { lines.append("Resolution  \(Int(size.width)) × \(Int(size.height))") }
         streamInfo = lines.joined(separator: "\n")
     }
 }
 
-struct AdaptiveAVPlayerView: View {
+private final class ConfiguredKSOptions: KSOptions {
+    let automaticAudioSelection: Bool
+    init(automaticAudioSelection: Bool) {
+        self.automaticAudioSelection = automaticAudioSelection
+        super.init()
+    }
+
+    override func wantedAudio(tracks: [MediaPlayerTrack]) -> Int? {
+        automaticAudioSelection ? (tracks.isEmpty ? nil : 0) : nil
+    }
+}
+
+private struct AdaptiveAVPlayerView: View {
     let url: URL
+    let title: String
     let bufferMilliseconds: Double
     let allowsPictureInPicture: Bool
+    let automaticAudioSelection: Bool
     @Binding var streamInfo: String
-    @StateObject private var session: PlayerSession
+    @StateObject private var session: AVPlaybackSession
 
-    init(url: URL, bufferMilliseconds: Double, allowsPictureInPicture: Bool, streamInfo: Binding<String>) {
+    init(url: URL, title: String, bufferMilliseconds: Double, allowsPictureInPicture: Bool, automaticAudioSelection: Bool, streamInfo: Binding<String>) {
         self.url = url
+        self.title = title
         self.bufferMilliseconds = bufferMilliseconds
         self.allowsPictureInPicture = allowsPictureInPicture
+        self.automaticAudioSelection = automaticAudioSelection
         _streamInfo = streamInfo
-        _session = StateObject(wrappedValue: PlayerSession(url: url, bufferMilliseconds: bufferMilliseconds))
+        _session = StateObject(wrappedValue: AVPlaybackSession(url: url, bufferMilliseconds: bufferMilliseconds, automaticAudioSelection: automaticAudioSelection))
     }
 
     var body: some View {
-        Group {
+        ZStack {
             if session.didFail {
-                KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, streamInfo: $streamInfo)
+                KSCompactPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: true, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
             } else {
-                AVPlayerContainer(player: session.player, allowsPictureInPicture: allowsPictureInPicture)
+                AVPlayerLayerView(session: session)
+            }
+            if session.isBuffering && !session.didFail { ProgressView().tint(.white).controlSize(.large) }
+            if !session.didFail {
+                PlaybackControlBar(accent: Color.neon, isPlaying: session.isPlaying, isMuted: session.isMuted, showsPiP: allowsPictureInPicture && session.isPiPSupported, showsProjection: true, onPlayPause: session.togglePlay, onMute: session.toggleMute, onPiP: session.togglePiP)
             }
         }
+        .onReceive(session.$streamInfo) { streamInfo = $0 }
         .onAppear { session.play() }
         .onDisappear { session.stop() }
     }
 }
 
+private struct AVPlayerLayerView: UIViewRepresentable {
+    @ObservedObject var session: AVPlaybackSession
+
+    func makeUIView(context: Context) -> PlayerLayerHostView {
+        let view = PlayerLayerHostView()
+        view.attach(session: session)
+        return view
+    }
+
+    func updateUIView(_ view: PlayerLayerHostView, context: Context) { view.attach(session: session) }
+    static func dismantleUIView(_ view: PlayerLayerHostView, coordinator: ()) { view.detach() }
+}
+
+private final class PlayerLayerHostView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private weak var session: AVPlaybackSession?
+
+    func attach(session: AVPlaybackSession) {
+        self.session = session
+        playerLayer.player = session.player
+        playerLayer.videoGravity = .resizeAspect
+        session.attach(playerLayer: playerLayer)
+    }
+
+    func detach() {
+        session?.detach(playerLayer: playerLayer)
+        playerLayer.player = nil
+        session = nil
+    }
+}
+
 @MainActor
-final class PlayerSession: ObservableObject {
+private final class AVPlaybackSession: ObservableObject {
     let player: AVPlayer
     @Published var didFail = false
-    private var observation: NSKeyValueObservation?
+    @Published var isPlaying = false
+    @Published var isBuffering = true
+    @Published var isMuted = false
+    @Published var isPiPSupported = false
+    @Published var isPiPActive = false
+    @Published var streamInfo = ""
+    private let automaticAudioSelection: Bool
+    private var statusObservation: NSKeyValueObservation?
+    private var timeObservation: NSKeyValueObservation?
     private var sizeObservation: NSKeyValueObservation?
-    private var videoCheck: Task<Void, Never>?
+    private var pipController: AVPictureInPictureController?
+    private var attachedLayer: AVPlayerLayer?
+    private var infoTask: Task<Void, Never>?
+    private var videoCheckTask: Task<Void, Never>?
 
-    init(url: URL, bufferMilliseconds: Double) {
+    init(url: URL, bufferMilliseconds: Double, automaticAudioSelection: Bool) {
+        self.automaticAudioSelection = automaticAudioSelection
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = max(bufferMilliseconds / 1000, 0)
         player = AVPlayer(playerItem: item)
-        observation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
+        statusObservation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if item.status == .failed { self.fallbackToKSPlayer() }
-                else if item.status == .readyToPlay { self.scheduleVideoCheck(for: item) }
+                switch item.status {
+                case .readyToPlay:
+                    self.didFail = false
+                    self.isBuffering = false
+                    if self.automaticAudioSelection { self.selectAudioTrack(on: item) }
+                    self.loadStreamInfo(for: item)
+                    self.scheduleVideoCheck(for: item)
+                case .failed:
+                    self.didFail = true
+                    self.isBuffering = false
+                default:
+                    break
+                }
+            }
+        }
+        timeObservation = player.observe(\AVPlayer.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isPlaying = player.timeControlStatus == .playing
+                self.isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
             }
         }
         sizeObservation = item.observe(\AVPlayerItem.presentationSize, options: [.new]) { [weak self] item, _ in
-            guard item.presentationSize.width > 0 && item.presentationSize.height > 0 else { return }
-            Task { @MainActor [weak self] in self?.videoCheck?.cancel() }
+            if item.presentationSize.width > 0 {
+                Task { @MainActor [weak self] in
+                    self?.videoCheckTask?.cancel()
+                    self?.isBuffering = false
+                }
+            }
         }
     }
 
-    func play() { if !didFail { player.play() } }
+    func play() { guard !didFail else { return }; player.play() }
+    func stop() { videoCheckTask?.cancel(); player.pause() }
+    func togglePlay() { isPlaying ? player.pause() : player.play() }
+    func toggleMute() { isMuted.toggle(); player.isMuted = isMuted }
 
-    func stop() { player.pause() }
+    func attach(playerLayer: AVPlayerLayer) {
+        guard attachedLayer !== playerLayer else { return }
+        attachedLayer = playerLayer
+        guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
+        let controller = AVPictureInPictureController(playerLayer: playerLayer)
+        controller?.delegate = self
+        pipController = controller
+        isPiPSupported = controller != nil
+    }
+
+    func detach(playerLayer: AVPlayerLayer) {
+        guard attachedLayer === playerLayer else { return }
+        if pipController?.isPictureInPictureActive == true { pipController?.stopPictureInPicture() }
+        pipController?.delegate = nil
+        pipController = nil
+        isPiPSupported = false
+        attachedLayer = nil
+    }
+
+    func togglePiP() {
+        guard let pipController else { return }
+        if pipController.isPictureInPictureActive { pipController.stopPictureInPicture() } else { pipController.startPictureInPicture() }
+    }
+
+    private func selectAudioTrack(on item: AVPlayerItem) {
+        guard let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible) else { return }
+        let option = group.defaultOption ?? group.options.first
+        if let option { item.select(option, in: group) }
+    }
+
+    private func loadStreamInfo(for item: AVPlayerItem) {
+        infoTask?.cancel()
+        infoTask = Task { [weak self, weak item] in
+            guard let self, let item else { return }
+            do {
+                let tracks = try await item.asset.load(.tracks)
+                var lines = ["Engine  AVPlayer"]
+                if let video = tracks.first(where: { $0.mediaType == .video }) {
+                    let size = try await video.load(.naturalSize)
+                    let fps = try await video.load(.nominalFrameRate)
+                    let rate = try await video.load(.estimatedDataRate)
+                    if size.width > 0 && size.height > 0 { lines.append("Resolution  \(Int(size.width)) × \(Int(size.height))") }
+                    if fps > 0 { lines.append(String(format: "Frame rate  %.2f fps", fps)) }
+                    if rate > 0 { lines.append("Bit rate  \(Int(rate / 1000)) kbps") }
+                    if let codec = Self.codecName(for: video) { lines.append("Video codec  \(codec)") }
+                }
+                if let audio = tracks.first(where: { $0.mediaType == .audio }), let codec = Self.codecName(for: audio) { lines.append("Audio codec  \(codec)") }
+                await MainActor.run { self.streamInfo = lines.joined(separator: "\n") }
+            } catch {
+                let message = item.error?.localizedDescription ?? "Stream metadata unavailable"
+                await MainActor.run { self.streamInfo = "Engine  AVPlayer\n\(message)" }
+            }
+        }
+    }
 
     private func scheduleVideoCheck(for item: AVPlayerItem) {
-        videoCheck?.cancel()
-        videoCheck = Task { [weak self, weak item] in
+        videoCheckTask?.cancel()
+        videoCheckTask = Task { [weak self, weak item] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             guard !Task.isCancelled, let self, let item, item.presentationSize == .zero else { return }
-            let tracks = try? await item.asset.loadTracks(withMediaType: .video)
-            guard tracks?.isEmpty == false, item.presentationSize == .zero else { return }
-            self.fallbackToKSPlayer()
+            do {
+                let tracks = try await item.asset.load(.tracks)
+                guard !Task.isCancelled, tracks.contains(where: { $0.mediaType == .video }), item.presentationSize == .zero else { return }
+                await MainActor.run {
+                    self.player.pause()
+                    self.didFail = true
+                    self.isBuffering = false
+                }
+            } catch {
+                // A network stream can delay track discovery; leave it to AVPlayer rather than failing on metadata alone.
+            }
         }
     }
 
-    private func fallbackToKSPlayer() {
-        guard !didFail else { return }
-        videoCheck?.cancel()
-        player.pause()
-        didFail = true
+    private static func codecName(for track: AVAssetTrack) -> String? {
+        guard let description = track.formatDescriptions.first as? CMFormatDescription else { return nil }
+        let code = CMFormatDescriptionGetMediaSubType(description)
+        let bytes: [UInt8] = [UInt8((code >> 24) & 0xff), UInt8((code >> 16) & 0xff), UInt8((code >> 8) & 0xff), UInt8(code & 0xff)]
+        return String(bytes: bytes, encoding: .ascii)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    deinit { observation?.invalidate(); sizeObservation?.invalidate(); videoCheck?.cancel(); player.pause() }
-}
-
-struct AVPlayerContainer: UIViewControllerRepresentable {
-    let player: AVPlayer
-    let allowsPictureInPicture: Bool
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.allowsPictureInPicturePlayback = allowsPictureInPicture
-        controller.canStartPictureInPictureAutomaticallyFromInline = allowsPictureInPicture
-        controller.showsPlaybackControls = true
-        return controller
-    }
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        if controller.player !== player { controller.player = player }
-        controller.allowsPictureInPicturePlayback = allowsPictureInPicture
-        controller.canStartPictureInPictureAutomaticallyFromInline = allowsPictureInPicture
+    deinit {
+        statusObservation?.invalidate(); timeObservation?.invalidate(); sizeObservation?.invalidate(); infoTask?.cancel(); videoCheckTask?.cancel(); pipController?.delegate = nil; player.pause()
     }
 }
 
+extension AVPlaybackSession: AVPictureInPictureControllerDelegate {
+    nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {}
+    nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { Task { @MainActor in self.isPiPActive = true } }
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) { Task { @MainActor in self.isPiPActive = false } }
+    nonisolated func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {}
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { Task { @MainActor in self.isPiPActive = false } }
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) { completionHandler(true) }
+}
 
 struct FavoritesView: View {
     @EnvironmentObject private var state: AppState
@@ -559,6 +784,7 @@ struct EmptyHomeState: View {
 struct PlaylistsView: View {
     @EnvironmentObject private var state: AppState
     @Binding var showAdd: Bool
+    @State private var editingPlaylist: Playlist?
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
@@ -567,19 +793,29 @@ struct PlaylistsView: View {
                 if state.playlists.isEmpty {
                     Text(state.localized("暂无播放列表")).foregroundStyle(.white.opacity(0.5)).padding(.horizontal, 28)
                 } else {
-                    ForEach(state.playlists) { playlist in PlaylistRow(playlist: playlist) { state.removePlaylist(playlist) } }
+                    ForEach(state.playlists) { playlist in PlaylistRow(playlist: playlist, onEdit: { editingPlaylist = playlist }) { state.removePlaylist(playlist) } }
                 }
             }.padding(.bottom, 120)
         }
+        .sheet(item: $editingPlaylist) { playlist in PlaylistFormView(editingPlaylist: playlist) }
     }
 }
 
 struct PlaylistRow: View {
     @EnvironmentObject private var state: AppState
     let playlist: Playlist
+    let onEdit: () -> Void
     let onDelete: () -> Void
     var body: some View {
-        HStack { VStack(alignment: .leading, spacing: 8) { Text(playlist.name).font(.system(size: 18, weight: .bold)); HStack { Image(systemName: "tv").foregroundStyle(Color.neon); Text("\(playlist.channelCount) \(state.localized("频道"))").foregroundStyle(Color.neon); Text("·").foregroundStyle(.white.opacity(0.4)); Text(playlist.kind.rawValue).foregroundStyle(.white.opacity(0.55)) }.font(.subheadline) }; Spacer(); Button(action: onDelete) { Image(systemName: "trash").foregroundStyle(Color.neon).padding(12).background(Color.neon.opacity(0.1), in: Circle()) }.buttonStyle(.plain) }.padding(.horizontal, 18).padding(.vertical, 17).background(Color.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.neon.opacity(0.42), lineWidth: 1)).padding(.horizontal, 22)
+        HStack {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(playlist.name).font(.system(size: 18, weight: .bold))
+                HStack { Image(systemName: "tv").foregroundStyle(Color.neon); Text("\(playlist.channelCount) \(state.localized("频道"))").foregroundStyle(Color.neon); Text("·").foregroundStyle(.white.opacity(0.4)); Text(playlist.kind.rawValue).foregroundStyle(.white.opacity(0.55)) }.font(.subheadline)
+            }
+            Spacer()
+            Button(action: onEdit) { Image(systemName: "pencil").foregroundStyle(Color.neon).frame(width: 44, height: 44).background(Color.neon.opacity(0.1), in: Circle()) }.buttonStyle(.plain)
+            Button(action: onDelete) { Image(systemName: "trash").foregroundStyle(.red).frame(width: 44, height: 44).background(Color.red.opacity(0.1), in: Circle()) }.buttonStyle(.plain)
+        }.padding(.horizontal, 18).padding(.vertical, 17).background(Color.card, in: RoundedRectangle(cornerRadius: 16)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.neon.opacity(0.42), lineWidth: 1)).padding(.horizontal, 22)
     }
 }
 

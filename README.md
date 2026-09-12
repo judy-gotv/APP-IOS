@@ -11,9 +11,11 @@
 - 收藏空状态（星标引导）和播放列表卡片
 - 频道分组、搜索、收藏星标、最近播放
 - AVKit 网络流播放（示例频道提供 HLS 地址）
-- EPG 节目单横向轨道
+- XMLTV EPG 节目单设置、频道匹配与播放页当前/后续节目
 - M3U / TXT、Xtream Codes、tvHeadend 播放列表添加表单
 - 播放设置、HTTP 代理、字幕字号和自动播放选项
+- 真实画中画、AirPlay 投影、硬件加速、自动音轨与编码信息
+- 播放列表编辑与保存后重新加载
 
 ## 在 Xcode 中运行
 
@@ -21,7 +23,7 @@
 2. 选择 iOS 16 或更高版本的运行目标。
 3. 运行 `NanoStreamClone` executable target。
 
-容器中没有安装 Swift/Xcode，因此这里无法执行 iOS 编译或模拟器截图验证。IPA 仅包含编译后的 Mach-O、Metal 着色器和 plist，没有原始 SwiftUI 图片、Storyboard 或源码；界面使用 IPA 中可确认的类名和文案重建，而不是复制二进制实现。
+Linux 容器没有 Apple 的 AVFoundation/SwiftUI SDK，无法在本地执行 iOS 编译或模拟器截图验证；GitHub Actions 使用 macOS 14 + Xcode 15.4 完成真实编译。IPA 仅包含编译后的 Mach-O、Metal 着色器和 plist，没有原始 SwiftUI 图片、Storyboard 或源码；界面使用 IPA 中可确认的类名和文案重建，而不是复制二进制实现。
 
 ## GitHub Actions 打包
 

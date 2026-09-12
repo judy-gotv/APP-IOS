@@ -21,6 +21,14 @@
 - [x] 新增繁體中文全局本地化。
 - [x] System/Light/Dark 主题选择。
 - [x] Cyberpunk/落日金/剧毒绿/霓虹粉/深海蓝色彩主题。
+- [x] KSPlayer 与 AVPlayer 共用精简播放控制层，中间播放按钮样式一致。
+- [x] AVPlayer 使用 AVPlayerLayer 自定义渲染，移除系统右上角音量按钮。
+- [x] AVPlayer 使用真实 AVPictureInPictureController 画中画与 AVRoutePickerView 投影入口。
+- [x] AVPlayer 编码信息从当前 AVPlayerItem 轨道读取分辨率、帧率、码率和编码类型。
+- [x] 播放详情页固定播放器，频道/订阅/节目列表独立滚动。
+- [x] 硬件加速与自动选择音轨设置真实接入 KSPlayer/AVPlayer。
+- [x] 播放列表支持编辑名称、地址、账号、密码并保存后重新加载。
+- [x] XMLTV EPG 地址设置、解析、频道匹配与播放页节目展示。
 - [x] GitHub macOS Runner 编译、KSPlayer/FFmpeg 依赖和标准 IPA 封装。
 - [ ] 使用 Apple Developer 证书配置签名 IPA。
 - [ ] 在真实 iPhone 上逐页截图回归并完成最终视觉校准。

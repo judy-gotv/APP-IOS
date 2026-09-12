@@ -19,6 +19,8 @@ struct SettingsView: View {
                 }
                 SettingsSection(title: state.localized("播放设置"), icon: "play.circle") {
                     ToggleRow(title: state.localized("画中画"), value: Binding(get: { state.pictureInPicture }, set: { state.setPictureInPicture($0) }))
+                    ToggleRow(title: state.localized("硬件加速"), value: Binding(get: { state.hardwareAcceleration }, set: { state.setHardwareAcceleration($0) }))
+                    ToggleRow(title: state.localized("自动选择音轨"), value: Binding(get: { state.automaticAudioSelection }, set: { state.setAutomaticAudioSelection($0) }))
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("首选播放器")).font(.system(size: 18))
                         Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
@@ -38,6 +40,19 @@ struct SettingsView: View {
                 SettingsSection(title: state.localized("数据与缓存"), icon: "externaldrive") {
                     ActionRow(title: state.localized("清除图片缓存"), icon: "trash") { state.clearImageCache() }
                     ActionRow(title: state.localized("清除播放历史"), icon: "clock.badge.xmark") { state.clearHistory() }
+                }
+                SettingsSection(title: state.localized("EPG节目单"), icon: "list.bullet.rectangle.portrait") {
+                    LabeledField(title: state.localized("EPG地址"), text: Binding(get: { state.epgURL }, set: { state.setEPGURL($0) }), placeholder: "https://example.com/guide.xml")
+                    HStack(spacing: 12) {
+                        Button(state.localized("刷新节目单")) { state.reloadEPG() }
+                            .buttonStyle(.borderedProminent).tint(state.accent)
+                            .disabled(state.epgURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isLoadingEPG)
+                        if state.isLoadingEPG { ProgressView().tint(state.accent) }
+                        if state.epgError == nil, !state.epgURL.isEmpty, !state.isLoadingEPG, !state.epgGuide.programsByChannelID.isEmpty {
+                            Label(state.localized("节目单已更新。"), systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(state.accent)
+                        }
+                    }.padding(.top, 6)
+                    if let epgError = state.epgError { Text(epgError).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true).padding(.top, 4) }
                 }
                 Text(state.localized("NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。")).font(.caption).foregroundStyle(.white.opacity(0.45)).multilineTextAlignment(.leading).padding(.horizontal, 22).padding(.bottom, 120)
             }
@@ -77,6 +92,7 @@ struct ActionRow: View { let title: String; let icon: String; let action: () -> 
 struct PlaylistFormView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
+    let editingPlaylist: Playlist?
     @State private var source = "M3U 链接"
     @State private var name = ""
     @State private var url = ""
@@ -86,11 +102,27 @@ struct PlaylistFormView: View {
     @State private var isSaving = false
     @State private var errorText: String?
 
+    init(editingPlaylist: Playlist? = nil) {
+        self.editingPlaylist = editingPlaylist
+        let source: String
+        switch editingPlaylist?.kind {
+        case .xtream: source = "Xtream"
+        case .m3u: source = editingPlaylist?.endpoint == "本地文件" ? "本地文件" : "M3U 链接"
+        case .tvHeadend: source = "M3U 链接"
+        case .none: source = "M3U 链接"
+        }
+        _source = State(initialValue: source)
+        _name = State(initialValue: editingPlaylist?.name ?? "")
+        _url = State(initialValue: editingPlaylist?.endpoint == "本地文件" ? "" : editingPlaylist?.endpoint ?? "")
+        _username = State(initialValue: editingPlaylist?.username ?? "")
+        _password = State(initialValue: editingPlaylist?.password ?? "")
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(state.localized("添加播放列表"))
+                    Text(state.localized(editingPlaylist == nil ? "添加播放列表" : "编辑播放列表"))
                         .font(.system(size: 24, weight: .bold))
                         .padding(.top, 8)
                     Text(state.localized("播放列表来源"))
@@ -111,12 +143,20 @@ struct PlaylistFormView: View {
                     } else {
                         Button { showFileImporter = true } label: { Label(url.isEmpty ? state.localized("选择本地 M3U 文件") : url, systemImage: "doc.badge.plus").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain).fieldStyle()
                     }
-                    if source != "本地文件" {
-                    AddPlaylistButton(name: name, source: source, url: url, username: username, password: password, isSaving: isSaving, title: state.localized("添加列表")) {
+                    if source != "本地文件" || editingPlaylist != nil {
+                    AddPlaylistButton(name: name, source: source, url: source == "本地文件" ? "local-file" : url, username: username, password: password, isSaving: isSaving, title: state.localized(editingPlaylist == nil ? "添加列表" : "保存并刷新")) {
                         isSaving = true
-                        state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url, username: username, password: password) { success in
-                            isSaving = false
-                            if success { dismiss() } else { errorText = state.playlistError ?? state.localized("播放列表添加失败。") }
+                        if let editingPlaylist {
+                            let updated = Playlist(id: editingPlaylist.id, name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: source == "本地文件" ? "本地文件" : url, username: username, password: password, channelCount: editingPlaylist.channelCount, lastRefresh: editingPlaylist.lastRefresh)
+                            state.updatePlaylist(updated) { success in
+                                isSaving = false
+                                if success { dismiss() } else { errorText = state.playlistError ?? state.localized("播放列表添加失败。") }
+                            }
+                        } else {
+                            state.addPlaylist(name: name, kind: source == "Xtream" ? .xtream : .m3u, endpoint: url, username: username, password: password) { success in
+                                isSaving = false
+                                if success { dismiss() } else { errorText = state.playlistError ?? state.localized("播放列表添加失败。") }
+                            }
                         }
                     }
                     }
