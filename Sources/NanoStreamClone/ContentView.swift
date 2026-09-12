@@ -365,7 +365,7 @@ struct PlayerSurface: View {
     var body: some View {
         switch engine {
         case .ksPlayer:
-            KSCompactPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
+            KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
         case .avPlayer, .auto:
             AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
         }
@@ -420,7 +420,6 @@ private struct AirPlayButton: UIViewRepresentable {
 
 private struct KSCompactPlayerView: View {
     let url: URL
-    let title: String
     let bufferMilliseconds: Double
     let allowsPictureInPicture: Bool
     let hardwareAcceleration: Bool
@@ -435,7 +434,7 @@ private struct KSCompactPlayerView: View {
     var body: some View {
         ZStack {
             Color.black
-            KSVideoPlayer(coordinator: coordinator, url: url, options: options, title: title)
+            KSVideoPlayer(coordinator: coordinator, url: url, options: options)
                 .onStateChanged { layer, playerState in
                     isPlaying = playerState.isPlaying
                     isBuffering = playerState == .preparing || playerState == .buffering
@@ -542,7 +541,7 @@ private struct AdaptiveAVPlayerView: View {
     var body: some View {
         ZStack {
             if session.didFail {
-                KSCompactPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: true, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
+                KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: true, automaticAudioSelection: automaticAudioSelection, streamInfo: $streamInfo)
             } else {
                 AVPlayerLayerView(session: session)
             }
@@ -590,7 +589,7 @@ private final class PlayerLayerHostView: UIView {
 }
 
 @MainActor
-private final class AVPlaybackSession: ObservableObject {
+private final class AVPlaybackSession: NSObject, ObservableObject {
     let player: AVPlayer
     @Published var didFail = false
     @Published var isPlaying = false
@@ -613,6 +612,7 @@ private final class AVPlaybackSession: ObservableObject {
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = max(bufferMilliseconds / 1000, 0)
         player = AVPlayer(playerItem: item)
+        super.init()
         statusObservation = item.observe(\AVPlayerItem.status, options: [.initial, .new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -697,9 +697,13 @@ private final class AVPlaybackSession: ObservableObject {
                     if size.width > 0 && size.height > 0 { lines.append("Resolution  \(Int(size.width)) × \(Int(size.height))") }
                     if fps > 0 { lines.append(String(format: "Frame rate  %.2f fps", fps)) }
                     if rate > 0 { lines.append("Bit rate  \(Int(rate / 1000)) kbps") }
-                    if let codec = Self.codecName(for: video) { lines.append("Video codec  \(codec)") }
+                    let descriptions = try await video.load(.formatDescriptions)
+                    if let codec = Self.codecName(for: descriptions) { lines.append("Video codec  \(codec)") }
                 }
-                if let audio = tracks.first(where: { $0.mediaType == .audio }), let codec = Self.codecName(for: audio) { lines.append("Audio codec  \(codec)") }
+                if let audio = tracks.first(where: { $0.mediaType == .audio }) {
+                    let descriptions = try await audio.load(.formatDescriptions)
+                    if let codec = Self.codecName(for: descriptions) { lines.append("Audio codec  \(codec)") }
+                }
                 await MainActor.run { self.streamInfo = lines.joined(separator: "\n") }
             } catch {
                 let message = item.error?.localizedDescription ?? "Stream metadata unavailable"
@@ -727,8 +731,9 @@ private final class AVPlaybackSession: ObservableObject {
         }
     }
 
-    private static func codecName(for track: AVAssetTrack) -> String? {
-        guard let description = track.formatDescriptions.first as? CMFormatDescription else { return nil }
+    private static func codecName(for descriptions: [Any]) -> String? {
+        guard let first = descriptions.first else { return nil }
+        let description = first as! CMFormatDescription
         let code = CMFormatDescriptionGetMediaSubType(description)
         let bytes: [UInt8] = [UInt8((code >> 24) & 0xff), UInt8((code >> 16) & 0xff), UInt8((code >> 8) & 0xff), UInt8(code & 0xff)]
         return String(bytes: bytes, encoding: .ascii)?.trimmingCharacters(in: .whitespacesAndNewlines)
