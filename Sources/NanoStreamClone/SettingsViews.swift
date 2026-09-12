@@ -11,7 +11,7 @@ struct SettingsView: View {
             VStack(spacing: 14) {
                 Text(state.localized("设置")).font(.system(size: 22, weight: .bold)).padding(.top, 52)
                 SettingsSection(title: state.localized("语言"), icon: "globe") {
-                    SettingsPickerRow(title: state.localized("语言"), value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: ["English", "Tiếng Việt", "中文"])
+                    SettingsPickerRow(title: state.localized("语言"), value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: ["English", "Tiếng Việt", "中文", "繁體中文"])
                 }
                 SettingsSection(title: state.localized("外观"), icon: "paintbrush") {
                     SettingsPickerRow(title: state.localized("主题模式"), value: Binding(get: { state.themeMode }, set: { state.setTheme($0) }), options: ["System", "Light", "Dark"])
@@ -22,7 +22,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("首选播放器")).font(.system(size: 18))
                         Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
-                        Text(state.localized(state.preferredPlayer == .avPlayer ? "AVPlayer 使用系统原生解码。" : state.preferredPlayer == .ksPlayer ? "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。" : "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。")).font(.caption).foregroundStyle(.white.opacity(0.5))
+                        Text(state.localized(state.preferredPlayer == .avPlayer ? "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。" : state.preferredPlayer == .ksPlayer ? "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。" : "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。")).font(.caption).foregroundStyle(.white.opacity(0.5))
                     }.padding(.vertical, 8)
                     HStack { Text("\(state.localized("字幕大小"))  \(Int(subtitleFontSize)) pt").font(.system(size: 18)); Spacer(); Stepper("", value: $subtitleFontSize, in: 12...40, step: 1).labelsHidden() }
                 }
@@ -189,14 +189,21 @@ struct AddPlaylistButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(title, action: action)
-            .font(.headline)
-            .foregroundStyle(!isValid || isSaving ? .white.opacity(0.35) : Color.appBackground)
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(!isValid || isSaving ? Color.panel : Color.neon)
+                if isSaving { ProgressView().tint(.white) }
+                else { Text(title).font(.headline).foregroundStyle(!isValid ? .white.opacity(0.35) : Color.appBackground) }
+            }
             .frame(maxWidth: .infinity)
             .frame(height: 56)
             .contentShape(Rectangle())
-            .background(!isValid || isSaving ? Color.panel : Color.neon, in: RoundedRectangle(cornerRadius: 14))
-            .disabled(!isValid || isSaving)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .disabled(!isValid || isSaving)
     }
 
     private var isValid: Bool { !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (source != "Xtream" || (!username.isEmpty && !password.isEmpty)) }

@@ -41,7 +41,14 @@ final class AppState: ObservableObject {
         language = UserDefaults.standard.string(forKey: "nanostream.language") ?? "中文"
         themeMode = UserDefaults.standard.string(forKey: "nanostream.theme") ?? "System"
         colorTheme = UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "剧毒绿"
-        preferredPlayer = PreferredPlayer(rawValue: UserDefaults.standard.string(forKey: "nanostream.player") ?? "KSPlayer") ?? .ksPlayer
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: "nanostream.ksPlayerDefault.v1") {
+            preferredPlayer = PreferredPlayer(rawValue: defaults.string(forKey: "nanostream.player") ?? "KSPlayer") ?? .ksPlayer
+        } else {
+            preferredPlayer = .ksPlayer
+            defaults.set(PreferredPlayer.ksPlayer.rawValue, forKey: "nanostream.player")
+            defaults.set(true, forKey: "nanostream.ksPlayerDefault.v1")
+        }
         networkBufferMilliseconds = UserDefaults.standard.object(forKey: "nanostream.buffer") as? Double ?? 3000
         gridLayout = GridLayout(rawValue: UserDefaults.standard.string(forKey: "nanostream.grid") ?? GridLayout.twoColumns.rawValue) ?? .twoColumns
         pictureInPicture = UserDefaults.standard.object(forKey: "nanostream.pip") as? Bool ?? true
@@ -57,10 +64,6 @@ final class AppState: ObservableObject {
     }
 
     var favoriteChannels: [Channel] { channels.filter { favorites.contains($0.id) } }
-
-    func channels(for quality: String) -> [Channel] {
-        quality == "全部" ? visibleChannels : visibleChannels.filter { $0.quality == quality }
-    }
 
     var accent: Color {
         switch colorTheme {
@@ -92,13 +95,13 @@ final class AppState: ObservableObject {
             "请先在“播放列表”中添加 M3U 或 Xtream 来源。": ("Add an M3U or Xtream source in Playlists first.", "Hãy thêm nguồn M3U hoặc Xtream trong Danh sách phát."),
             "无收藏频道": ("No favorite channels", "Chưa có kênh yêu thích"), "用星号标记频道以便在此快速访问。": ("Star a channel to access it here.", "Đánh dấu sao để truy cập nhanh tại đây."),
             "暂无播放列表": ("No playlists", "Chưa có danh sách phát"), "添加播放列表": ("Add playlist", "Thêm danh sách phát"), "关闭": ("Close", "Đóng"),
-            "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"),
+            "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"), "暂无节目数据": ("No program data", "Chưa có dữ liệu chương trình"),
             "编码信息": ("Stream information", "Thông tin luồng"), "暂无数据": ("Unavailable", "Không có dữ liệu"), "播放失败，请检查频道地址。": ("Playback failed. Check the channel URL.", "Phát không thành công. Hãy kiểm tra URL kênh."),
             "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"),
             "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"),
             "网络缓存大小": ("Network buffer", "Bộ đệm mạng"), "清除图片缓存": ("Clear image cache", "Xóa bộ nhớ ảnh"), "清除播放历史": ("Clear playback history", "Xóa lịch sử phát"), "选择本地 M3U 文件": ("Choose local M3U file", "Chọn tệp M3U cục bộ"), "输入列表名称": ("Playlist name", "Tên danh sách phát"), "详细信息": ("Details", "Chi tiết"), "播放列表来源": ("Playlist source", "Nguồn danh sách phát"), "添加列表": ("Add playlist", "Thêm danh sách phát"),
             "2列": ("2 columns", "2 cột"), "4列": ("4 columns", "4 cột"),
-            "AVPlayer 使用系统原生解码。": ("AVPlayer uses Apple's native decoder.", "AVPlayer dùng bộ giải mã gốc của Apple."),
+            "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。": ("AVPlayer uses Apple's native decoder and hands unsupported video tracks to KSPlayer.", "AVPlayer dùng bộ giải mã gốc của Apple và chuyển video không được hỗ trợ sang KSPlayer."),
             "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。": ("KSPlayer uses FFmpeg for broader IPTV format support.", "KSPlayer dùng FFmpeg để hỗ trợ nhiều định dạng IPTV hơn."),
             "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。": ("Auto tries AVPlayer first, then switches to KSPlayer if it fails.", "Tự động thử AVPlayer trước, sau đó chuyển sang KSPlayer nếu lỗi."),
             "网络连接较慢或不稳定时，可增加缓存": ("Increase the buffer for slow or unstable connections.", "Tăng bộ đệm khi kết nối chậm hoặc không ổn định."),
@@ -113,7 +116,31 @@ final class AppState: ObservableObject {
             "赛博朋克": ("Cyberpunk", "Cyberpunk"), "落日金": ("Sunset Gold", "Vàng hoàng hôn"), "剧毒绿": ("Toxic Green", "Xanh độc"), "霓虹粉": ("Neon Pink", "Hồng neon"), "深海蓝": ("Deep Sea Blue", "Xanh biển sâu"),
             "本地文件": ("Local file", "Tệp cục bộ"), "M3U 链接": ("M3U link", "Liên kết M3U"), "服务器地址 (http://...)": ("Server URL (http://...)", "URL máy chủ (http://...)"), "用户名": ("Username", "Tên người dùng"), "密码": ("Password", "Mật khẩu")
         ]
-        return language == "English" ? (table[key]?.0 ?? key) : (table[key]?.1 ?? key)
+        if language == "English" { return table[key]?.0 ?? key }
+        if language == "Tiếng Việt" { return table[key]?.1 ?? key }
+        let traditional: [String: String] = [
+            "设置": "設定", "播放列表": "播放清單", "收藏": "收藏", "主页": "首頁", "全部": "全部",
+            "搜索频道...": "搜尋頻道...", "最近播放": "最近播放", "暂无播放记录": "暫無播放記錄", "暂无频道": "暫無頻道",
+            "请先在“播放列表”中添加 M3U 或 Xtream 来源。": "請先在「播放清單」中加入 M3U 或 Xtream 來源。",
+            "无收藏频道": "沒有收藏的頻道", "用星号标记频道以便在此快速访问。": "以星號標記頻道，即可在這裡快速開啟。",
+            "暂无播放列表": "暫無播放清單", "添加播放列表": "加入播放清單", "关闭": "關閉",
+            "订阅": "訂閱", "频道": "頻道", "节目": "節目", "暂无节目数据": "暫無節目資料",
+            "编码信息": "編碼資訊", "暂无数据": "暫無資料", "播放失败，请检查频道地址。": "播放失敗，請檢查頻道網址。",
+            "语言": "語言", "外观": "外觀", "播放设置": "播放設定", "网络": "網路", "缓冲区": "緩衝區", "数据与缓存": "資料與快取",
+            "主题模式": "主題模式", "色彩主题": "色彩主題", "画中画": "子母畫面", "首选播放器": "偏好播放器", "字幕大小": "字幕大小",
+            "网络缓存大小": "網路緩衝大小", "清除图片缓存": "清除圖片快取", "清除播放历史": "清除播放記錄",
+            "选择本地 M3U 文件": "選擇本機 M3U 檔案", "输入列表名称": "輸入清單名稱", "详细信息": "詳細資訊", "播放列表来源": "播放清單來源", "添加列表": "加入清單",
+            "2列": "2 欄", "4列": "4 欄", "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。": "AVPlayer 使用系統原生解碼，不支援的視訊軌會自動交給 KSPlayer。",
+            "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。": "KSPlayer 使用 FFmpeg，支援更多 IPTV 串流格式。",
+            "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。": "Auto 會先嘗試 AVPlayer，失敗後自動切換至 KSPlayer。",
+            "网络连接较慢或不稳定时，可增加缓存": "網路較慢或不穩定時，可增加緩衝。",
+            "NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。": "NanoStream 是媒體播放器。請只加入您有權觀看的播放清單與串流。",
+            "文件中没有找到有效频道。": "檔案中找不到有效頻道。", "播放列表添加失败。": "無法加入播放清單。", "图片缓存已清除。": "圖片快取已清除。",
+            "播放列表地址无效。": "播放清單網址無效。", "播放列表为空或没有有效频道。": "播放清單為空或沒有有效頻道。", "返回内容不是有效的 M3U 播放列表。": "回傳內容不是有效的 M3U 播放清單。",
+            "系统": "系統", "浅色": "淺色", "深色": "深色", "赛博朋克": "電馭叛客", "落日金": "落日金", "剧毒绿": "劇毒綠", "霓虹粉": "霓虹粉", "深海蓝": "深海藍",
+            "本地文件": "本機檔案", "M3U 链接": "M3U 連結", "服务器地址 (http://...)": "伺服器網址 (http://...)", "用户名": "使用者名稱", "密码": "密碼"
+        ]
+        return traditional[key] ?? key.applyingTransform(StringTransform("Simplified-Traditional"), reverse: false) ?? key
     }
 
     func localizedValue(_ value: String) -> String {
@@ -134,7 +161,10 @@ final class AppState: ObservableObject {
         if let playlistError = error as? PlaylistLoadError {
             switch playlistError {
             case .invalidURL: return localized("播放列表地址无效。")
-            case .httpStatus(let status): return language == "中文" ? "服务器返回 HTTP \(status)。" : "The server returned HTTP \(status)."
+            case .httpStatus(let status):
+                if language == "中文" { return "服务器返回 HTTP \(status)。" }
+                if language == "繁體中文" { return "伺服器回傳 HTTP \(status)。" }
+                return language == "Tiếng Việt" ? "Máy chủ trả về HTTP \(status)." : "The server returned HTTP \(status)."
             case .empty: return localized("播放列表为空或没有有效频道。")
             case .invalidFormat: return localized("返回内容不是有效的 M3U 播放列表。")
             }
@@ -180,7 +210,11 @@ final class AppState: ObservableObject {
 
     func refreshPlaylists() {
         guard let playlist = playlists.first else { return }
-        addPlaylist(name: playlist.name, kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: playlist.password)
+        activatePlaylist(playlist)
+    }
+
+    func activatePlaylist(_ playlist: Playlist) {
+        Task { await reloadPlaylist(playlist) }
     }
 
     func clearHistory() { recent.removeAll(); save() }
@@ -202,6 +236,26 @@ final class AppState: ObservableObject {
         } catch {
             playlistError = localizedError(error)
             await completion(false)
+        }
+        isLoadingPlaylist = false
+    }
+
+    private func reloadPlaylist(_ playlist: Playlist) async {
+        isLoadingPlaylist = true
+        playlistError = nil
+        do {
+            let loaded = try await PlaylistLoader.load(kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: playlist.password)
+            guard !loaded.isEmpty else { throw PlaylistLoadError.empty }
+            channels = loaded
+            if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
+                playlists[index].channelCount = loaded.count
+                playlists[index].lastRefresh = Date()
+            }
+            selectedGroup = "全部"
+            searchText = ""
+            save()
+        } catch {
+            playlistError = localizedError(error)
         }
         isLoadingPlaylist = false
     }
