@@ -928,7 +928,8 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
                 }
                 await MainActor.run { self.audioOptions = names }
             }
-            if let variants = try? await item.asset.load(.variants) {
+            if let urlAsset = item.asset as? AVURLAsset,
+               let variants = try? await urlAsset.load(.variants) {
                 let names = variants.enumerated().map { index, variant -> String in
                     let width = variant.videoAttributes?.presentationSize.width ?? 0
                     let height = variant.videoAttributes?.presentationSize.height ?? 0
