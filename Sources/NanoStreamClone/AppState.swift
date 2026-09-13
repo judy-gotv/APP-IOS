@@ -136,7 +136,7 @@ final class AppState: ObservableObject {
             "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"), "选择订阅": ("Choose subscription", "Chọn đăng ký"), "暂无节目数据": ("No program data", "Chưa có dữ liệu chương trình"), "当前节目": ("Now", "Đang phát"), "下一节目": ("Next", "Tiếp theo"),
             "编码信息": ("Stream information", "Thông tin luồng"), "暂无数据": ("Unavailable", "Không có dữ liệu"), "播放失败，请检查频道地址。": ("Playback failed. Check the channel URL.", "Phát không thành công. Hãy kiểm tra URL kênh."),
             "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"), "预览": ("Live preview", "Xem trước trực tiếp"), "显示延迟": ("Show latency", "Hiển thị độ trễ"),
-            "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"), "EPG节目单": ("EPG guide", "EPG"), "EPG地址": ("EPG URL", "URL EPG"), "保存节目单": ("Save guide", "Lưu EPG"), "更新节目单地址": ("Update guide URL", "Cập nhật URL EPG"), "删除节目单": ("Delete guide", "Xóa EPG"), "刷新节目单": ("Refresh guide", "Làm mới EPG"), "自动刷新": ("Auto refresh", "Tự động làm mới"), "关闭": ("Off", "Tắt"), "15分钟": ("15 minutes", "15 phút"), "30分钟": ("30 minutes", "30 phút"), "60分钟": ("60 minutes", "60 phút"), "6小时": ("6 hours", "6 giờ"), "节目单已更新。": ("Guide updated.", "EPG đã cập nhật."),
+            "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"), "EPG节目单": ("EPG guide", "EPG"), "EPG地址": ("EPG URL", "URL EPG"), "保存节目单": ("Save guide", "Lưu EPG"), "更新节目单地址": ("Update guide URL", "Cập nhật URL EPG"), "删除节目单": ("Delete guide", "Xóa EPG"), "刷新节目单": ("Refresh guide", "Làm mới EPG"), "自动刷新": ("Auto refresh", "Tự động làm mới"), "关闭自动刷新": ("Off", "Tắt"), "15分钟": ("15 minutes", "15 phút"), "30分钟": ("30 minutes", "30 phút"), "60分钟": ("60 minutes", "60 phút"), "6小时": ("6 hours", "6 giờ"), "节目单已更新。": ("Guide updated.", "EPG đã cập nhật."),
             "网络缓存大小": ("Network buffer", "Bộ đệm mạng"), "清除图片缓存": ("Clear image cache", "Xóa bộ nhớ ảnh"), "清除播放历史": ("Clear playback history", "Xóa lịch sử phát"), "选择本地 M3U 文件": ("Choose local M3U file", "Chọn tệp M3U cục bộ"), "输入列表名称": ("Playlist name", "Tên danh sách phát"), "详细信息": ("Details", "Chi tiết"), "播放列表来源": ("Playlist source", "Nguồn danh sách phát"), "添加列表": ("Add playlist", "Thêm danh sách phát"),
             "2列": ("2 columns", "2 cột"), "3列": ("3 columns", "3 cột"), "4列": ("4 columns", "4 cột"),
             "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。": ("AVPlayer uses Apple's native decoder and hands unsupported video tracks to KSPlayer.", "AVPlayer dùng bộ giải mã gốc của Apple và chuyển video không được hỗ trợ sang KSPlayer."),
@@ -164,7 +164,7 @@ final class AppState: ObservableObject {
             "暂无播放列表": "暫無播放清單", "添加播放列表": "加入播放清單", "关闭": "關閉",
             "订阅": "訂閱", "频道": "頻道", "节目": "節目", "选择订阅": "選擇訂閱", "暂无节目数据": "暫無節目資料", "当前节目": "目前", "下一节目": "下一個",
             "编码信息": "編碼資訊", "暂无数据": "暫無資料", "播放失败，请检查频道地址。": "播放失敗，請檢查頻道網址。",
-            "语言": "語言", "外观": "外觀", "播放设置": "播放設定", "网络": "網路", "缓冲区": "緩衝區", "数据与缓存": "資料與快取", "预览": "預覽", "显示延迟": "顯示延遲", "EPG节目单": "EPG 節目表", "EPG地址": "EPG 網址", "保存节目单": "儲存節目表", "更新节目单地址": "更新節目表網址", "删除节目单": "刪除節目表", "刷新节目单": "重新整理節目表", "自动刷新": "自動重新整理", "关闭": "關閉", "15分钟": "15 分鐘", "30分钟": "30 分鐘", "60分钟": "60 分鐘", "6小时": "6 小時", "节目单已更新。": "節目表已更新。",
+            "语言": "語言", "外观": "外觀", "播放设置": "播放設定", "网络": "網路", "缓冲区": "緩衝區", "数据与缓存": "資料與快取", "预览": "預覽", "显示延迟": "顯示延遲", "EPG节目单": "EPG 節目表", "EPG地址": "EPG 網址", "保存节目单": "儲存節目表", "更新节目单地址": "更新節目表網址", "删除节目单": "刪除節目表", "刷新节目单": "重新整理節目表", "自动刷新": "自動重新整理", "关闭自动刷新": "關閉自動重新整理", "15分钟": "15 分鐘", "30分钟": "30 分鐘", "60分钟": "60 分鐘", "6小时": "6 小時", "节目单已更新。": "節目表已更新。",
             "主题模式": "主題模式", "色彩主题": "色彩主題", "画中画": "子母畫面", "首选播放器": "偏好播放器", "字幕大小": "字幕大小",
             "网络缓存大小": "網路緩衝大小", "清除图片缓存": "清除圖片快取", "清除播放历史": "清除播放記錄",
             "选择本地 M3U 文件": "選擇本機 M3U 檔案", "输入列表名称": "輸入清單名稱", "详细信息": "詳細資訊", "播放列表来源": "播放清單來源", "添加列表": "加入清單",
@@ -194,7 +194,7 @@ final class AppState: ObservableObject {
         case "3列": return localized("3列")
         case "4列": return localized("4列")
         case "2列": return localized("2列")
-        case "关闭": return localized("关闭")
+        case "关闭自动刷新": return localized("关闭自动刷新")
         case "15分钟": return localized("15分钟")
         case "30分钟": return localized("30分钟")
         case "60分钟": return localized("60分钟")

@@ -63,12 +63,12 @@ struct SettingsView: View {
                         if state.isLoadingEPG { ProgressView().tint(state.accent) }
                     }.padding(.top, 4)
                     SettingsPickerRow(title: state.localized("自动刷新"), value: Binding(get: {
-                        switch state.epgRefreshIntervalMinutes { case 15: return "15分钟"; case 30: return "30分钟"; case 60: return "60分钟"; case 360: return "6小时"; default: return "关闭" }
+                        switch state.epgRefreshIntervalMinutes { case 15: return "15分钟"; case 30: return "30分钟"; case 60: return "60分钟"; case 360: return "6小时"; default: return "关闭自动刷新" }
                     }, set: { value in
                         let minutes: Int
                         switch value { case "15分钟": minutes = 15; case "30分钟": minutes = 30; case "60分钟": minutes = 60; case "6小时": minutes = 360; default: minutes = 0 }
                         state.setEPGRefreshInterval(minutes)
-                    }), options: ["关闭", "15分钟", "30分钟", "60分钟", "6小时"])
+                    }), options: ["关闭自动刷新", "15分钟", "30分钟", "60分钟", "6小时"])
                     if let updated = state.epgLastUpdated {
                         Text("\(state.localized("节目单已更新。"))  (updated.formatted(date: .abbreviated, time: .shortened))")
                             .font(.caption).foregroundStyle(state.accent)

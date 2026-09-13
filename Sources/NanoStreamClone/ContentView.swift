@@ -592,7 +592,9 @@ private struct KSCompactPlayerView: View {
     @State private var isBuffering = true
     @State private var audioOptions: [String] = []
     @State private var videoOptions: [String] = []
+    @State private var latencyMilliseconds: Int?
     @State private var hideToken = UUID()
+    @State private var latencyTimer: Timer?
 
     var body: some View {
         ZStack {
@@ -610,14 +612,17 @@ private struct KSCompactPlayerView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { controlsVisible ? hideControls() : revealControls() }
             if isBuffering { ProgressView().tint(.white).controlSize(.large) }
-            if showLatency { StreamLatencyBadge(milliseconds: nil).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading) }
+            if showLatency { StreamLatencyBadge(milliseconds: latencyMilliseconds).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading) }
             if controlsVisible {
                 PlaybackControlBar(accent: Color.neon, isPlaying: isPlaying, isMuted: coordinator.isMuted, showsPiP: allowsPictureInPicture, showsProjection: false, onPlayPause: togglePlay, onMute: toggleMute, onPiP: togglePiP, audioOptions: audioOptions, videoOptions: videoOptions, onAudioSelect: selectAudio, onVideoSelect: selectVideo)
                     .transition(.opacity)
             }
         }
-        .onAppear { revealControls() }
-        .onDisappear { coordinator.resetPlayer() }
+        .onAppear {
+            revealControls()
+            latencyTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in sampleLatency() }
+        }
+        .onDisappear { latencyTimer?.invalidate(); latencyTimer = nil; coordinator.resetPlayer() }
     }
 
     private var options: KSOptions {
@@ -697,6 +702,18 @@ private struct KSCompactPlayerView: View {
         audioOptions = player.tracks(mediaType: .audio).map { $0.name.isEmpty ? "Audio" : $0.name }
         let videoTracks = player.tracks(mediaType: .video)
         videoOptions = videoTracks.count > 1 ? videoTracks.map { $0.name.isEmpty ? "Video" : $0.name } : []
+    }
+
+    private func sampleLatency() {
+        guard let player = coordinator.playerLayer?.player,
+              player.seekable,
+              player.playableTime.isFinite,
+              player.currentPlaybackTime.isFinite else {
+            latencyMilliseconds = nil
+            return
+        }
+        let seconds = player.playableTime - player.currentPlaybackTime
+        latencyMilliseconds = seconds >= 0 && seconds.isFinite ? Int((seconds * 1000).rounded()) : nil
     }
 }
 
@@ -906,6 +923,8 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
             player.currentItem?.preferredPeakBitRate = 4_000_000
         case "480p":
             player.currentItem?.preferredPeakBitRate = 2_000_000
+        case "360p":
+            player.currentItem?.preferredPeakBitRate = 1_000_000
         default:
             // For custom dimensions, keep the current adaptive selection. AVPlayer
             // does not expose a stable public variant-index selector across OSes.
@@ -932,15 +951,14 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
             }
             if let urlAsset = item.asset as? AVURLAsset,
                let variants = try? await urlAsset.load(.variants) {
-                let names = variants.enumerated().map { index, variant -> String in
-                    let width = variant.videoAttributes?.presentationSize.width ?? 0
+                let names = variants.compactMap { variant -> String? in
                     let height = variant.videoAttributes?.presentationSize.height ?? 0
                     if height >= 2160 { return "4K" }
                     if height >= 1080 { return "1080p" }
                     if height >= 720 { return "720p" }
                     if height >= 480 { return "480p" }
-                    if width > 0 && height > 0 { return "\(Int(width))×\(Int(height))" }
-                    return "清晰度 \(index + 1)"
+                    if height >= 360 { return "360p" }
+                    return nil
                 }
                 var unique: [String] = []
                 for value in ["自动"] + names where !unique.contains(value) { unique.append(value) }
