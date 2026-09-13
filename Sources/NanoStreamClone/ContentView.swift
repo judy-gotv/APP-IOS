@@ -641,6 +641,7 @@ private struct KSCompactPlayerView: View {
         guard let layer = coordinator.playerLayer else { return }
         let tracks = layer.player.tracks(mediaType: .audio)
         guard tracks.indices.contains(index) else { return }
+        tracks.forEach { $0.isEnabled = false }
         tracks[index].isEnabled = true
         updateTrackOptions(from: layer)
         revealControls()
@@ -650,6 +651,7 @@ private struct KSCompactPlayerView: View {
         guard let layer = coordinator.playerLayer else { return }
         let tracks = layer.player.tracks(mediaType: .video)
         guard tracks.indices.contains(index) else { return }
+        tracks.forEach { $0.isEnabled = false }
         tracks[index].isEnabled = true
         updateTrackOptions(from: layer)
         revealControls()
