@@ -186,7 +186,6 @@ private final class PreviewPlayerModel: NSObject, ObservableObject {
 
     init(url: URL) {
         let item = AVPlayerItem(url: url)
-        item.canUseNetworkResourcesForLiveStreaming = true
         player = AVPlayer(playerItem: item)
         super.init()
     }
@@ -194,7 +193,9 @@ private final class PreviewPlayerModel: NSObject, ObservableObject {
     func start() {
         player.play()
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.sampleLatency() }
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.sampleLatency() }
+        }
         sampleLatency()
     }
 
@@ -640,7 +641,7 @@ private struct KSCompactPlayerView: View {
         guard let layer = coordinator.playerLayer else { return }
         let tracks = layer.player.tracks(mediaType: .audio)
         guard tracks.indices.contains(index) else { return }
-        layer.player.select(track: tracks[index])
+        tracks[index].isEnabled = true
         updateTrackOptions(from: layer)
         revealControls()
     }
@@ -649,7 +650,7 @@ private struct KSCompactPlayerView: View {
         guard let layer = coordinator.playerLayer else { return }
         let tracks = layer.player.tracks(mediaType: .video)
         guard tracks.indices.contains(index) else { return }
-        layer.player.select(track: tracks[index])
+        tracks[index].isEnabled = true
         updateTrackOptions(from: layer)
         revealControls()
     }
@@ -812,7 +813,6 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
         self.automaticAudioSelection = automaticAudioSelection
         let item = AVPlayerItem(url: url)
         item.preferredForwardBufferDuration = max(bufferMilliseconds / 1000, 0)
-        item.canUseNetworkResourcesForLiveStreaming = true
         player = AVPlayer(playerItem: item)
         currentItem = item
         super.init()
@@ -885,7 +885,7 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
     func selectAudio(_ index: Int) {
         guard let item = currentItem else { return }
         Task { [weak self] in
-            guard let self, let group = try? await item.asset.loadMediaSelectionGroup(for: .audible), group.options.indices.contains(index) else { return }
+            guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible), group.options.indices.contains(index) else { return }
             item.select(group.options[index], in: group)
         }
     }
