@@ -42,6 +42,7 @@ final class AppState: ObservableObject {
     private let storageKey = "nanostream.state.v4"
 
     init() {
+        let initialEPGURL = UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? ""
         if let saved = Self.restore(key: storageKey) {
             channels = saved.channels
             playlists = saved.playlists
@@ -57,7 +58,6 @@ final class AppState: ObservableObject {
             activePlaylistID = nil
             channelSetsByPlaylist = [:]
         }
-        if channelSetsByPlaylist.isEmpty, let activePlaylistID, !channels.isEmpty { channelSetsByPlaylist[activePlaylistID] = channels }
         language = UserDefaults.standard.string(forKey: "nanostream.language") ?? "中文"
         themeMode = UserDefaults.standard.string(forKey: "nanostream.theme") ?? "System"
         colorTheme = UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "剧毒绿"
@@ -74,12 +74,13 @@ final class AppState: ObservableObject {
         pictureInPicture = UserDefaults.standard.object(forKey: "nanostream.pip") as? Bool ?? true
         hardwareAcceleration = UserDefaults.standard.object(forKey: "nanostream.hardwareAcceleration") as? Bool ?? true
         automaticAudioSelection = UserDefaults.standard.object(forKey: "nanostream.automaticAudioSelection") as? Bool ?? true
-        epgURL = UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? ""
-        epgDraftURL = epgURL
+        epgURL = initialEPGURL
+        epgDraftURL = initialEPGURL
         epgRefreshIntervalMinutes = UserDefaults.standard.object(forKey: "nanostream.epgRefreshIntervalMinutes") as? Int ?? 0
         epgLastUpdated = UserDefaults.standard.object(forKey: "nanostream.epgLastUpdated") as? Date
         previewEnabled = UserDefaults.standard.object(forKey: "nanostream.previewEnabled") as? Bool ?? false
         showLatency = UserDefaults.standard.object(forKey: "nanostream.showLatency") as? Bool ?? false
+        if channelSetsByPlaylist.isEmpty, let activePlaylistID, !channels.isEmpty { channelSetsByPlaylist[activePlaylistID] = channels }
         if !epgURL.isEmpty {
             reloadEPG()
             startEPGRefreshLoop()
