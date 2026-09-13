@@ -24,11 +24,18 @@ final class AppState: ObservableObject {
     @Published var automaticAudioSelection: Bool
     @Published var activePlaylistID: UUID?
     @Published var epgURL: String
+    @Published var epgDraftURL: String
+    @Published var epgRefreshIntervalMinutes: Int
+    @Published private(set) var epgLastUpdated: Date?
     @Published private(set) var epgGuide = EPGGuide.empty
     @Published private(set) var isLoadingEPG = false
     @Published private(set) var epgError: String?
+    @Published var previewEnabled: Bool
+    @Published var showLatency: Bool
     let player = StreamPlayer()
+    private var channelSetsByPlaylist: [UUID: [Channel]]
     private var epgTask: Task<Void, Never>?
+    private var epgRefreshLoopTask: Task<Void, Never>?
 
     // v4 intentionally starts with no bundled/demo channels. Existing installs
     // using the old demo state are migrated to a clean, user-owned library.
@@ -41,13 +48,16 @@ final class AppState: ObservableObject {
             favorites = saved.favorites
             recent = saved.recent
             activePlaylistID = saved.activePlaylistID ?? saved.playlists.first?.id
+            channelSetsByPlaylist = saved.channelSetsByPlaylist ?? [:]
         } else {
             channels = []
             playlists = []
             favorites = []
             recent = []
             activePlaylistID = nil
+            channelSetsByPlaylist = [:]
         }
+        if channelSetsByPlaylist.isEmpty, let activePlaylistID, !channels.isEmpty { channelSetsByPlaylist[activePlaylistID] = channels }
         language = UserDefaults.standard.string(forKey: "nanostream.language") ?? "中文"
         themeMode = UserDefaults.standard.string(forKey: "nanostream.theme") ?? "System"
         colorTheme = UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "剧毒绿"
@@ -65,15 +75,22 @@ final class AppState: ObservableObject {
         hardwareAcceleration = UserDefaults.standard.object(forKey: "nanostream.hardwareAcceleration") as? Bool ?? true
         automaticAudioSelection = UserDefaults.standard.object(forKey: "nanostream.automaticAudioSelection") as? Bool ?? true
         epgURL = UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? ""
+        epgDraftURL = epgURL
+        epgRefreshIntervalMinutes = UserDefaults.standard.object(forKey: "nanostream.epgRefreshIntervalMinutes") as? Int ?? 0
+        epgLastUpdated = UserDefaults.standard.object(forKey: "nanostream.epgLastUpdated") as? Date
+        previewEnabled = UserDefaults.standard.object(forKey: "nanostream.previewEnabled") as? Bool ?? false
+        showLatency = UserDefaults.standard.object(forKey: "nanostream.showLatency") as? Bool ?? false
         if !epgURL.isEmpty {
-            epgTask = Task { [weak self] in await self?.refreshEPG() }
+            reloadEPG()
+            startEPGRefreshLoop()
         }
     }
 
     var groups: [String] { ["全部"] + Array(Set(channels.map(\.group))).sorted() }
 
     var visibleChannels: [Channel] {
-        channels.filter { channel in
+        guard !isLoadingPlaylist else { return [] }
+        return channels.filter { channel in
             (selectedGroup == "全部" || channel.group == selectedGroup) &&
             (searchText.isEmpty || channel.name.localizedCaseInsensitiveContains(searchText))
         }
@@ -104,6 +121,8 @@ final class AppState: ObservableObject {
     func setPictureInPicture(_ value: Bool) { pictureInPicture = value; UserDefaults.standard.set(value, forKey: "nanostream.pip") }
     func setHardwareAcceleration(_ value: Bool) { hardwareAcceleration = value; UserDefaults.standard.set(value, forKey: "nanostream.hardwareAcceleration") }
     func setAutomaticAudioSelection(_ value: Bool) { automaticAudioSelection = value; UserDefaults.standard.set(value, forKey: "nanostream.automaticAudioSelection") }
+    func setPreviewEnabled(_ value: Bool) { previewEnabled = value; UserDefaults.standard.set(value, forKey: "nanostream.previewEnabled") }
+    func setShowLatency(_ value: Bool) { showLatency = value; UserDefaults.standard.set(value, forKey: "nanostream.showLatency") }
     func localized(_ key: String) -> String {
         guard language != "中文" else { return key }
         let table: [String: (String, String)] = [
@@ -113,12 +132,12 @@ final class AppState: ObservableObject {
             "请先在“播放列表”中添加 M3U 或 Xtream 来源。": ("Add an M3U or Xtream source in Playlists first.", "Hãy thêm nguồn M3U hoặc Xtream trong Danh sách phát."),
             "无收藏频道": ("No favorite channels", "Chưa có kênh yêu thích"), "用星号标记频道以便在此快速访问。": ("Star a channel to access it here.", "Đánh dấu sao để truy cập nhanh tại đây."),
             "暂无播放列表": ("No playlists", "Chưa có danh sách phát"), "添加播放列表": ("Add playlist", "Thêm danh sách phát"), "关闭": ("Close", "Đóng"),
-            "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"), "暂无节目数据": ("No program data", "Chưa có dữ liệu chương trình"), "当前节目": ("Now", "Đang phát"), "下一节目": ("Next", "Tiếp theo"),
+            "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"), "选择订阅": ("Choose subscription", "Chọn đăng ký"), "暂无节目数据": ("No program data", "Chưa có dữ liệu chương trình"), "当前节目": ("Now", "Đang phát"), "下一节目": ("Next", "Tiếp theo"),
             "编码信息": ("Stream information", "Thông tin luồng"), "暂无数据": ("Unavailable", "Không có dữ liệu"), "播放失败，请检查频道地址。": ("Playback failed. Check the channel URL.", "Phát không thành công. Hãy kiểm tra URL kênh."),
-            "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"),
-            "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"), "EPG节目单": ("EPG guide", "EPG"), "EPG地址": ("EPG URL", "URL EPG"), "刷新节目单": ("Refresh guide", "Làm mới EPG"), "节目单已更新。": ("Guide updated.", "EPG đã cập nhật."),
+            "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"), "预览": ("Live preview", "Xem trước trực tiếp"), "显示延迟": ("Show latency", "Hiển thị độ trễ"),
+            "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"), "EPG节目单": ("EPG guide", "EPG"), "EPG地址": ("EPG URL", "URL EPG"), "保存节目单": ("Save guide", "Lưu EPG"), "更新节目单地址": ("Update guide URL", "Cập nhật URL EPG"), "删除节目单": ("Delete guide", "Xóa EPG"), "刷新节目单": ("Refresh guide", "Làm mới EPG"), "自动刷新": ("Auto refresh", "Tự động làm mới"), "关闭": ("Off", "Tắt"), "15分钟": ("15 minutes", "15 phút"), "30分钟": ("30 minutes", "30 phút"), "60分钟": ("60 minutes", "60 phút"), "6小时": ("6 hours", "6 giờ"), "节目单已更新。": ("Guide updated.", "EPG đã cập nhật."),
             "网络缓存大小": ("Network buffer", "Bộ đệm mạng"), "清除图片缓存": ("Clear image cache", "Xóa bộ nhớ ảnh"), "清除播放历史": ("Clear playback history", "Xóa lịch sử phát"), "选择本地 M3U 文件": ("Choose local M3U file", "Chọn tệp M3U cục bộ"), "输入列表名称": ("Playlist name", "Tên danh sách phát"), "详细信息": ("Details", "Chi tiết"), "播放列表来源": ("Playlist source", "Nguồn danh sách phát"), "添加列表": ("Add playlist", "Thêm danh sách phát"),
-            "2列": ("2 columns", "2 cột"), "4列": ("4 columns", "4 cột"),
+            "2列": ("2 columns", "2 cột"), "3列": ("3 columns", "3 cột"), "4列": ("4 columns", "4 cột"),
             "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。": ("AVPlayer uses Apple's native decoder and hands unsupported video tracks to KSPlayer.", "AVPlayer dùng bộ giải mã gốc của Apple và chuyển video không được hỗ trợ sang KSPlayer."),
             "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。": ("KSPlayer uses FFmpeg for broader IPTV format support.", "KSPlayer dùng FFmpeg để hỗ trợ nhiều định dạng IPTV hơn."),
             "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。": ("Auto tries AVPlayer first, then switches to KSPlayer if it fails.", "Tự động thử AVPlayer trước, sau đó chuyển sang KSPlayer nếu lỗi."),
@@ -142,13 +161,13 @@ final class AppState: ObservableObject {
             "请先在“播放列表”中添加 M3U 或 Xtream 来源。": "請先在「播放清單」中加入 M3U 或 Xtream 來源。",
             "无收藏频道": "沒有收藏的頻道", "用星号标记频道以便在此快速访问。": "以星號標記頻道，即可在這裡快速開啟。",
             "暂无播放列表": "暫無播放清單", "添加播放列表": "加入播放清單", "关闭": "關閉",
-            "订阅": "訂閱", "频道": "頻道", "节目": "節目", "暂无节目数据": "暫無節目資料", "当前节目": "目前", "下一节目": "下一個",
+            "订阅": "訂閱", "频道": "頻道", "节目": "節目", "选择订阅": "選擇訂閱", "暂无节目数据": "暫無節目資料", "当前节目": "目前", "下一节目": "下一個",
             "编码信息": "編碼資訊", "暂无数据": "暫無資料", "播放失败，请检查频道地址。": "播放失敗，請檢查頻道網址。",
-            "语言": "語言", "外观": "外觀", "播放设置": "播放設定", "网络": "網路", "缓冲区": "緩衝區", "数据与缓存": "資料與快取", "EPG节目单": "EPG 節目表", "EPG地址": "EPG 網址", "刷新节目单": "重新整理節目表", "节目单已更新。": "節目表已更新。",
+            "语言": "語言", "外观": "外觀", "播放设置": "播放設定", "网络": "網路", "缓冲区": "緩衝區", "数据与缓存": "資料與快取", "预览": "預覽", "显示延迟": "顯示延遲", "EPG节目单": "EPG 節目表", "EPG地址": "EPG 網址", "保存节目单": "儲存節目表", "更新节目单地址": "更新節目表網址", "删除节目单": "刪除節目表", "刷新节目单": "重新整理節目表", "自动刷新": "自動重新整理", "关闭": "關閉", "15分钟": "15 分鐘", "30分钟": "30 分鐘", "60分钟": "60 分鐘", "6小时": "6 小時", "节目单已更新。": "節目表已更新。",
             "主题模式": "主題模式", "色彩主题": "色彩主題", "画中画": "子母畫面", "首选播放器": "偏好播放器", "字幕大小": "字幕大小",
             "网络缓存大小": "網路緩衝大小", "清除图片缓存": "清除圖片快取", "清除播放历史": "清除播放記錄",
             "选择本地 M3U 文件": "選擇本機 M3U 檔案", "输入列表名称": "輸入清單名稱", "详细信息": "詳細資訊", "播放列表来源": "播放清單來源", "添加列表": "加入清單",
-            "2列": "2 欄", "4列": "4 欄", "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。": "AVPlayer 使用系統原生解碼，不支援的視訊軌會自動交給 KSPlayer。",
+            "2列": "2 欄", "3列": "3 欄", "4列": "4 欄", "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。": "AVPlayer 使用系統原生解碼，不支援的視訊軌會自動交給 KSPlayer。",
             "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。": "KSPlayer 使用 FFmpeg，支援更多 IPTV 串流格式。",
             "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。": "Auto 會先嘗試 AVPlayer，失敗後自動切換至 KSPlayer。",
             "网络连接较慢或不稳定时，可增加缓存": "網路較慢或不穩定時，可增加緩衝。",
@@ -171,6 +190,14 @@ final class AppState: ObservableObject {
         case "剧毒绿": return localized("剧毒绿")
         case "霓虹粉": return localized("霓虹粉")
         case "深海蓝": return localized("深海蓝")
+        case "3列": return localized("3列")
+        case "4列": return localized("4列")
+        case "2列": return localized("2列")
+        case "关闭": return localized("关闭")
+        case "15分钟": return localized("15分钟")
+        case "30分钟": return localized("30分钟")
+        case "60分钟": return localized("60分钟")
+        case "6小时": return localized("6小时")
         default: return value
         }
     }
@@ -223,15 +250,61 @@ final class AppState: ObservableObject {
     }
 
     func setEPGURL(_ value: String) {
-        epgURL = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        UserDefaults.standard.set(epgURL, forKey: "nanostream.epgURL")
+        epgDraftURL = value
         epgError = nil
-        if epgURL.isEmpty { epgGuide = .empty; isLoadingEPG = false }
+    }
+
+    func saveEPGSource() {
+        let value = epgDraftURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        epgURL = value
+        UserDefaults.standard.set(value, forKey: "nanostream.epgURL")
+        if value.isEmpty {
+            deleteEPGSource()
+            return
+        }
+        reloadEPG()
+        startEPGRefreshLoop()
+    }
+
+    func updateEPGSource() { saveEPGSource() }
+
+    func deleteEPGSource() {
+        epgTask?.cancel()
+        epgRefreshLoopTask?.cancel()
+        epgTask = nil
+        epgRefreshLoopTask = nil
+        epgURL = ""
+        epgDraftURL = ""
+        epgGuide = .empty
+        epgError = nil
+        epgLastUpdated = nil
+        isLoadingEPG = false
+        UserDefaults.standard.removeObject(forKey: "nanostream.epgURL")
+        UserDefaults.standard.removeObject(forKey: "nanostream.epgLastUpdated")
+    }
+
+    func setEPGRefreshInterval(_ minutes: Int) {
+        epgRefreshIntervalMinutes = minutes
+        UserDefaults.standard.set(minutes, forKey: "nanostream.epgRefreshIntervalMinutes")
+        startEPGRefreshLoop()
     }
 
     func reloadEPG() {
         epgTask?.cancel()
         epgTask = Task { [weak self] in await self?.refreshEPG() }
+    }
+
+    func startEPGRefreshLoop() {
+        epgRefreshLoopTask?.cancel()
+        guard epgRefreshIntervalMinutes > 0, !epgURL.isEmpty else { return }
+        let interval = UInt64(epgRefreshIntervalMinutes) * 60 * 1_000_000_000
+        epgRefreshLoopTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: interval)
+                guard !Task.isCancelled else { return }
+                await self?.refreshEPG()
+            }
+        }
     }
 
     func refreshEPG() async {
@@ -248,6 +321,8 @@ final class AppState: ObservableObject {
             let guide = try await EPGService.fetch(endpoint: endpoint)
             guard !Task.isCancelled else { return }
             epgGuide = guide
+            epgLastUpdated = Date()
+            UserDefaults.standard.set(epgLastUpdated, forKey: "nanostream.epgLastUpdated")
         } catch {
             guard !Task.isCancelled else { return }
             epgGuide = .empty
@@ -275,6 +350,7 @@ final class AppState: ObservableObject {
             let playlist = Playlist(name: name.isEmpty ? "本地播放列表" : name, kind: .m3u, endpoint: "本地文件", channelCount: parsed.count, lastRefresh: Date())
             playlists.insert(playlist, at: 0)
             activePlaylistID = playlist.id
+            channelSetsByPlaylist[playlist.id] = parsed
             playlistError = nil
             save()
         }
@@ -282,6 +358,7 @@ final class AppState: ObservableObject {
 
     func removePlaylist(_ playlist: Playlist) {
         playlists.removeAll { $0.id == playlist.id }
+        channelSetsByPlaylist.removeValue(forKey: playlist.id)
         if activePlaylistID == playlist.id { activePlaylistID = playlists.first?.id }
         if playlists.isEmpty { channels.removeAll() }
         save()
@@ -290,8 +367,7 @@ final class AppState: ObservableObject {
     func refreshPlaylists() {
         guard let playlist = playlists.first else { return }
         if playlist.endpoint == "本地文件" {
-            activePlaylistID = playlist.id
-            save()
+            activatePlaylist(playlist)
             return
         }
         activatePlaylist(playlist)
@@ -300,6 +376,16 @@ final class AppState: ObservableObject {
     func activatePlaylist(_ playlist: Playlist) {
         activePlaylistID = playlist.id
         save()
+        if let cached = channelSetsByPlaylist[playlist.id] {
+            channels = cached
+            selectedGroup = "全部"
+            searchText = ""
+        }
+        guard playlist.endpoint != "本地文件" else {
+            isLoadingPlaylist = false
+            return
+        }
+        isLoadingPlaylist = true
         Task { await reloadPlaylist(playlist) }
     }
 
@@ -335,6 +421,7 @@ final class AppState: ObservableObject {
             let playlist = Playlist(name: name.isEmpty ? "新播放列表" : name, kind: kind, endpoint: endpoint, username: username, password: password, channelCount: loaded.count, lastRefresh: Date())
             playlists.insert(playlist, at: 0)
             activePlaylistID = playlist.id
+            channelSetsByPlaylist[playlist.id] = loaded
             selectedGroup = "全部"
             searchText = ""
             save()
@@ -353,6 +440,7 @@ final class AppState: ObservableObject {
             let loaded = try await PlaylistLoader.load(kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: playlist.password)
             guard !loaded.isEmpty else { throw PlaylistLoadError.empty }
             channels = loaded
+            channelSetsByPlaylist[playlist.id] = loaded
             if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
                 playlists[index].channelCount = loaded.count
                 playlists[index].lastRefresh = Date()
@@ -368,7 +456,7 @@ final class AppState: ObservableObject {
     }
 
     private func save() {
-        let state = SavedState(channels: channels, playlists: playlists, favorites: favorites, recent: recent, activePlaylistID: activePlaylistID)
+        let state = SavedState(channels: channels, playlists: playlists, favorites: favorites, recent: recent, activePlaylistID: activePlaylistID, channelSetsByPlaylist: channelSetsByPlaylist)
         guard let data = try? JSONEncoder().encode(state) else { return }
         UserDefaults.standard.set(data, forKey: storageKey)
     }
@@ -385,16 +473,18 @@ private struct SavedState: Codable {
     var favorites: Set<String>
     var recent: [String]
     var activePlaylistID: UUID?
+    var channelSetsByPlaylist: [UUID: [Channel]]?
 
-    init(channels: [Channel], playlists: [Playlist], favorites: Set<String>, recent: [String], activePlaylistID: UUID?) {
+    init(channels: [Channel], playlists: [Playlist], favorites: Set<String>, recent: [String], activePlaylistID: UUID?, channelSetsByPlaylist: [UUID: [Channel]]) {
         self.channels = channels
         self.playlists = playlists
         self.favorites = favorites
         self.recent = recent
         self.activePlaylistID = activePlaylistID
+        self.channelSetsByPlaylist = channelSetsByPlaylist
     }
 
-    private enum CodingKeys: String, CodingKey { case channels, playlists, favorites, recent, activePlaylistID }
+    private enum CodingKeys: String, CodingKey { case channels, playlists, favorites, recent, activePlaylistID, channelSetsByPlaylist }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -403,6 +493,7 @@ private struct SavedState: Codable {
         favorites = try container.decode(Set<String>.self, forKey: .favorites)
         recent = try container.decode([String].self, forKey: .recent)
         activePlaylistID = try container.decodeIfPresent(UUID.self, forKey: .activePlaylistID)
+        channelSetsByPlaylist = try container.decodeIfPresent([UUID: [Channel]].self, forKey: .channelSetsByPlaylist)
     }
 }
 
@@ -415,9 +506,12 @@ enum PreferredPlayer: String, CaseIterable, Identifiable {
 
 enum GridLayout: String, CaseIterable, Identifiable {
     case twoColumns = "2列"
+    case threeColumns = "3列"
     case fourColumns = "4列"
     var id: String { rawValue }
-    var columns: Int { self == .twoColumns ? 2 : 4 }
+    var columns: Int {
+        switch self { case .twoColumns: return 2; case .threeColumns: return 3; case .fourColumns: return 4 }
+    }
 }
 
 @MainActor

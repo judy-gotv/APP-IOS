@@ -21,6 +21,8 @@ struct SettingsView: View {
                     ToggleRow(title: state.localized("画中画"), value: Binding(get: { state.pictureInPicture }, set: { state.setPictureInPicture($0) }))
                     ToggleRow(title: state.localized("硬件加速"), value: Binding(get: { state.hardwareAcceleration }, set: { state.setHardwareAcceleration($0) }))
                     ToggleRow(title: state.localized("自动选择音轨"), value: Binding(get: { state.automaticAudioSelection }, set: { state.setAutomaticAudioSelection($0) }))
+                    ToggleRow(title: state.localized("预览"), value: Binding(get: { state.previewEnabled }, set: { state.setPreviewEnabled($0) }))
+                    ToggleRow(title: state.localized("显示延迟"), value: Binding(get: { state.showLatency }, set: { state.setShowLatency($0) }))
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("首选播放器")).font(.system(size: 18))
                         Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
@@ -42,16 +44,35 @@ struct SettingsView: View {
                     ActionRow(title: state.localized("清除播放历史"), icon: "clock.badge.xmark") { state.clearHistory() }
                 }
                 SettingsSection(title: state.localized("EPG节目单"), icon: "list.bullet.rectangle.portrait") {
-                    LabeledField(title: state.localized("EPG地址"), text: Binding(get: { state.epgURL }, set: { state.setEPGURL($0) }), placeholder: "https://example.com/guide.xml")
-                    HStack(spacing: 12) {
-                        Button(state.localized("刷新节目单")) { state.reloadEPG() }
+                    LabeledField(title: state.localized("EPG地址"), text: Binding(get: { state.epgDraftURL }, set: { state.setEPGURL($0) }), placeholder: "https://example.com/guide.xml")
+                    HStack(spacing: 10) {
+                        Button(state.localized("保存节目单")) { state.saveEPGSource() }
                             .buttonStyle(.borderedProminent).tint(state.accent)
-                            .disabled(state.epgURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isLoadingEPG)
+                            .disabled(state.epgDraftURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isLoadingEPG)
+                        Button(state.localized("更新节目单地址")) { state.updateEPGSource() }
+                            .buttonStyle(.bordered).tint(state.accent)
+                            .disabled(state.epgDraftURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || state.isLoadingEPG)
+                    }
+                    HStack(spacing: 10) {
+                        Button(state.localized("刷新节目单")) { state.reloadEPG() }
+                            .buttonStyle(.bordered).tint(state.accent)
+                            .disabled(state.epgURL.isEmpty || state.isLoadingEPG)
+                        Button(state.localized("删除节目单"), role: .destructive) { state.deleteEPGSource() }
+                            .buttonStyle(.bordered)
+                            .disabled(state.epgURL.isEmpty && state.epgDraftURL.isEmpty)
                         if state.isLoadingEPG { ProgressView().tint(state.accent) }
-                        if state.epgError == nil, !state.epgURL.isEmpty, !state.isLoadingEPG, !state.epgGuide.programsByChannelID.isEmpty {
-                            Label(state.localized("节目单已更新。"), systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(state.accent)
-                        }
-                    }.padding(.top, 6)
+                    }.padding(.top, 4)
+                    SettingsPickerRow(title: state.localized("自动刷新"), value: Binding(get: {
+                        switch state.epgRefreshIntervalMinutes { case 15: return "15分钟"; case 30: return "30分钟"; case 60: return "60分钟"; case 360: return "6小时"; default: return "关闭" }
+                    }, set: { value in
+                        let minutes: Int
+                        switch value { case "15分钟": minutes = 15; case "30分钟": minutes = 30; case "60分钟": minutes = 60; case "6小时": minutes = 360; default: minutes = 0 }
+                        state.setEPGRefreshInterval(minutes)
+                    }), options: ["关闭", "15分钟", "30分钟", "60分钟", "6小时"])
+                    if let updated = state.epgLastUpdated {
+                        Text("\(state.localized("节目单已更新。"))  (updated.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption).foregroundStyle(state.accent)
+                    }
                     if let epgError = state.epgError { Text(epgError).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true).padding(.top, 4) }
                 }
                 Text(state.localized("NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。")).font(.caption).foregroundStyle(.white.opacity(0.45)).multilineTextAlignment(.leading).padding(.horizontal, 22).padding(.bottom, 120)
