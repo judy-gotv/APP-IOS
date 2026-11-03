@@ -3,8 +3,9 @@ name: Build unsigned test bundle
 # Unsigned test package only: this workflow deliberately does NOT use
 # archive/exportArchive with signing, because no Apple Developer signing
 # is configured yet (see NANOSTREAM_TASKS.md). The artifact is a hand-packed
-# .app in a Payload folder inside a .zip, NOT an installable IPA for a
-# normal iPhone. Do not present it to users as installable.
+# .app in a Payload folder inside an .ipa file (an .ipa is a zip with a
+# Payload folder). It is STILL UNSIGNED and NOT installable on a normal
+# iPhone. Do not present it to users as installable.
 on:
   workflow_dispatch:
   push:
@@ -118,18 +119,20 @@ jobs:
           EOF
           cd build
           # Round-4 fix (A06): the notice used to travel as a separate
-          # artifact only, so anyone downloading just the .ipa never saw
-          # "unsigned, not installable". It now rides inside the package,
-          # and the package itself is a .zip, not a misleading .ipa.
-          /usr/bin/zip -qry "NanoStreamClone-unsigned-${{ github.sha }}.zip" Payload UNSIGNED_NOTICE.txt
-          shasum -a 256 "NanoStreamClone-unsigned-${{ github.sha }}.zip" > "NanoStreamClone-unsigned-${{ github.sha }}.zip.sha256"
+          # artifact only, so anyone downloading just the package never
+          # saw "unsigned, not installable". It now rides inside the
+          # package. Per user request (2026-11-03) the package is named
+          # .ipa instead of .zip; the name change does NOT make it
+          # signed or installable, and the notice still says so.
+          /usr/bin/zip -qry "NanoStreamClone-unsigned-${{ github.sha }}.ipa" Payload UNSIGNED_NOTICE.txt
+          shasum -a 256 "NanoStreamClone-unsigned-${{ github.sha }}.ipa" > "NanoStreamClone-unsigned-${{ github.sha }}.ipa.sha256"
 
       - name: Upload unsigned test bundle and logs
         uses: actions/upload-artifact@v4
         with:
           name: NanoStreamClone-unsigned-${{ github.sha }}
           path: |
-            build/NanoStreamClone-unsigned-${{ github.sha }}.zip
-            build/NanoStreamClone-unsigned-${{ github.sha }}.zip.sha256
+            build/NanoStreamClone-unsigned-${{ github.sha }}.ipa
+            build/NanoStreamClone-unsigned-${{ github.sha }}.ipa.sha256
             build/UNSIGNED_NOTICE.txt
             build/build.log
