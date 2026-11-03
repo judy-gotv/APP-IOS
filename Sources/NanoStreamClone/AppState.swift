@@ -158,9 +158,6 @@ final class AppState: ObservableObject {
                 // of showing another playlist's channels under its name.
                 activePlaylistID = saved.activePlaylistID.flatMap { id in saved.playlists.contains(where: { $0.id == id }) ? id : nil }
                 channelSetsByPlaylist = saved.channelSetsByPlaylist ?? [:]
-                if let active = activePlaylistID, let cached = channelSetsByPlaylist[active] {
-                    channels = cached
-                }
                 // A clean restore supersedes any backup from an earlier
                 // corrupt launch; delete the expired backup.
                 UserDefaults.standard.removeObject(forKey: storageKey + ".bak")
@@ -192,50 +189,6 @@ final class AppState: ObservableObject {
             channelSetsByPlaylist = [:]
         }
         stateRestoreFailed = restoreFailed
-        // One-time migration: legacy playlists decoded with a plain-text
-        // password move it to the Keychain, then drop it from memory.
-        // SavedState encoding no longer writes passwords at all.
-        // Round-3 fix (C01): credentials embedded in the endpoint string
-        // itself (a pasted get.php?username=&password=, or a tvHeadend
-        // address with userinfo) are stripped here too, not just the
-        // password field. The generic tvHeadend sanitizer strips userinfo
-        // and username/password query items for any path, so it doubles
-        // as the endpoint cleaner for both kinds.
-        var migrated = false
-        var migrationPasswordFailed = false
-        for index in playlists.indices {
-            let cleaned = PlaylistLoader.sanitizedTvHeadend(endpoint: playlists[index].endpoint, username: playlists[index].username, password: playlists[index].password)
-            if cleaned.endpoint != playlists[index].endpoint || cleaned.username != playlists[index].username || cleaned.password != playlists[index].password {
-                playlists[index].endpoint = cleaned.endpoint
-                playlists[index].username = cleaned.username
-                playlists[index].password = cleaned.password
-                migrated = true
-            }
-        }
-        for index in playlists.indices where !playlists[index].password.isEmpty {
-            // Round-3 fix (C14): only clear the in-memory password when
-            // the Keychain write (with read-back verification) actually
-            // succeeded. Previously the return value was ignored, so a
-            // failed write silently destroyed the only copy.
-            if KeychainStore.savePassword(playlists[index].password, for: playlists[index].id) {
-                playlists[index].password = ""
-                migrated = true
-            } else {
-                migrationPasswordFailed = true
-            }
-        }
-        // Round-4 fix (C04): on a migration failure the old persisted
-        // state is the ONLY other copy of the password (SavedState never
-        // writes passwords), so saving now would overwrite it with a
-        // passwordless state and lose the credential on the next launch.
-        // Skip the migration save, keep the in-memory password for this
-        // session, and surface a visible error prompting the user to
-        // re-enter the password (which re-saves it to Keychain). The
-        // residual gap: any later save() in this session still persists
-        // a passwordless state, so re-entering promptly matters.
-        if migrationPasswordFailed {
-            saveError = localized("播放列表密码迁移失败，请重新输入该列表的密码。")
-        } else if migrated { save() }
         language = UserDefaults.standard.string(forKey: "nanostream.language") ?? "中文"
         themeMode = UserDefaults.standard.string(forKey: "nanostream.theme") ?? "System"
         colorTheme = Self.migratedColorTheme(UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "toxic")
@@ -300,6 +253,59 @@ final class AppState: ObservableObject {
         }
         previewEnabled = Self.boolValue(forKey: "nanostream.previewEnabled") ?? false
         showLatency = Self.boolValue(forKey: "nanostream.showLatency") ?? false
+        // (moved) Cached channels for the active playlist: this reads
+        // self properties, so it must run after every stored property
+        // has been assigned (see below); it used to sit inside the
+        // restore branch, before the rest of init had run.
+        if let active = activePlaylistID, let cached = channelSetsByPlaylist[active] {
+            channels = cached
+        }
+
+        // One-time migration: legacy playlists decoded with a plain-text
+        // password move it to the Keychain, then drop it from memory.
+        // SavedState encoding no longer writes passwords at all.
+        // Round-3 fix (C01): credentials embedded in the endpoint string
+        // itself (a pasted get.php?username=&password=, or a tvHeadend
+        // address with userinfo) are stripped here too, not just the
+        // password field. The generic tvHeadend sanitizer strips userinfo
+        // and username/password query items for any path, so it doubles
+        // as the endpoint cleaner for both kinds.
+        var migrated = false
+        var migrationPasswordFailed = false
+        for index in playlists.indices {
+            let cleaned = PlaylistLoader.sanitizedTvHeadend(endpoint: playlists[index].endpoint, username: playlists[index].username, password: playlists[index].password)
+            if cleaned.endpoint != playlists[index].endpoint || cleaned.username != playlists[index].username || cleaned.password != playlists[index].password {
+                playlists[index].endpoint = cleaned.endpoint
+                playlists[index].username = cleaned.username
+                playlists[index].password = cleaned.password
+                migrated = true
+            }
+        }
+        for index in playlists.indices where !playlists[index].password.isEmpty {
+            // Round-3 fix (C14): only clear the in-memory password when
+            // the Keychain write (with read-back verification) actually
+            // succeeded. Previously the return value was ignored, so a
+            // failed write silently destroyed the only copy.
+            if KeychainStore.savePassword(playlists[index].password, for: playlists[index].id) {
+                playlists[index].password = ""
+                migrated = true
+            } else {
+                migrationPasswordFailed = true
+            }
+        }
+        // Round-4 fix (C04): on a migration failure the old persisted
+        // state is the ONLY other copy of the password (SavedState never
+        // writes passwords), so saving now would overwrite it with a
+        // passwordless state and lose the credential on the next launch.
+        // Skip the migration save, keep the in-memory password for this
+        // session, and surface a visible error prompting the user to
+        // re-enter the password (which re-saves it to Keychain). The
+        // residual gap: any later save() in this session still persists
+        // a passwordless state, so re-entering promptly matters.
+        if migrationPasswordFailed {
+            saveError = localized("播放列表密码迁移失败，请重新输入该列表的密码。")
+        } else if migrated { save() }
+
         if !epgURL.isEmpty {
             reloadEPG()
             startEPGRefreshLoop()

@@ -643,19 +643,19 @@ struct AddPlaylistButton: View {
     // Round-2 fix: on edit, a blank password means "keep the stored one"
     // (see AppState.updatePlaylist), so the save button must not demand a
     // freshly typed password. On create, Xtream still requires both fields.
-    let isEditing: Bool = false
+    let isEditing: Bool
     // Round-3 fix (B12): isEditing alone used to allow a blank password
     // even when no password is stored at all (type change to Xtream, or a
     // deleted stored password), so the button looked valid and the load
     // failed later with an empty-credentials error. Blank is only valid
     // when a stored password actually exists.
-    let hasStoredPassword: Bool = false
+    let hasStoredPassword: Bool
     // Round-3 fix (B15): editing a remote playlist to "local file" with
     // no file chosen used to save anyway and wipe the remote address and
     // credential with no confirmation. Such an edit is only valid when
     // the playlist is already local (rename) or a file was just chosen.
-    let isEditingLocal: Bool = false
-    let localFileSelected: Bool = false
+    let isEditingLocal: Bool
+    let localFileSelected: Bool
     let title: String
     let action: () -> Void
 
