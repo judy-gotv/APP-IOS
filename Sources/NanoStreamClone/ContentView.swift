@@ -236,7 +236,7 @@ private final class PreviewSessionPool {
     private let limit = 4
     // Reference-counted: two cards for the same channel id (duplicate
     // entries) must not release each other's slot.
-    private var active: [String: Int] = []
+    private var active: [String: Int] = [:]
 
     func acquire(_ id: String) -> Bool {
         if let count = active[id] { active[id] = count + 1; return true }
@@ -926,7 +926,14 @@ private struct KSCompactPlayerView: View {
         ZStack {
             Color.black
             KSVideoPlayer(coordinator: coordinator, url: url, options: options)
-                .id(retryID)
+                // Compile-fix round: onStateChanged/onFinish are
+                // KSVideoPlayer members, not View extensions — the
+                // audit-added .id(retryID) between the player and
+                // onStateChanged erased the type to `some View` and
+                // broke the chain (this is also the order the
+                // original, compiling code used). .id() now sits
+                // after the KSPlayer modifiers, so a retryID bump
+                // still recreates the whole player subtree.
                 .onStateChanged { layer, playerState in
                     isPlaying = playerState.isPlaying
                     isBuffering = playerState == .preparing || playerState == .buffering
@@ -946,6 +953,7 @@ private struct KSCompactPlayerView: View {
                     }
                 }
                 .onFinish { _, _ in isPlaying = false; ksDidFinish = true; controlsVisible = true }
+                .id(retryID)
                 .contentShape(Rectangle())
                 .onTapGesture { controlsVisible ? hideControls() : revealControls() }
             if isBuffering { ProgressView().tint(.white).controlSize(.large) }
@@ -1795,7 +1803,13 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
 
     private static func codecName(for descriptions: [Any]) -> String? {
         guard let first = descriptions.first else { return nil }
-        guard let description = first as? CMFormatDescription else { return nil }
+        // Compile-fix round: a conditional downcast to the Core
+        // Foundation type CMFormatDescription is rejected (it is
+        // treated as always succeeding). Keep the original intent —
+        // return nil for a non-CMFormatDescription — with an `is`
+        // check followed by an unconditional cast.
+        guard first is CMFormatDescription else { return nil }
+        let description = first as CMFormatDescription
         let code = CMFormatDescriptionGetMediaSubType(description)
         let bytes: [UInt8] = [UInt8((code >> 24) & 0xff), UInt8((code >> 16) & 0xff), UInt8((code >> 8) & 0xff), UInt8(code & 0xff)]
         return String(bytes: bytes, encoding: .ascii)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1806,16 +1820,27 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
         // called from onDisappear (except when PiP is active). A @MainActor
         // deinit is not isolated, so this does the minimum safe cleanup.
         statusObservation?.invalidate(); timeObservation?.invalidate(); sizeObservation?.invalidate()
-        cancelAllTasks(); pipController?.delegate = nil; player.pause(); player.replaceCurrentItem(with: nil)
+        // Compile-fix round: deinit is nonisolated and cannot call the
+        // MainActor-isolated cancelAllTasks(), but deinit may access
+        // the instance's own stored properties, so the two
+        // cancellation statements are inlined here (identical effect).
+        infoTask?.cancel(); videoCheckTask?.cancel(); optionsTask?.cancel(); latencyTask?.cancel(); notReadyTask?.cancel()
+        infoTask = nil; videoCheckTask = nil; optionsTask = nil; latencyTask = nil; notReadyTask = nil
+        pipController?.delegate = nil; player.pause(); player.replaceCurrentItem(with: nil)
     }
 }
 
 extension AVPlaybackSession: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {}
-    nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { Task { [weak self] in await MainActor.run { self?.isPiPActive = true } } }
-    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) { Task { [weak self] in await MainActor.run { self?.isPiPActive = false } } }
+    // Compile-fix round: these delegate methods are nonisolated, but
+    // the session is @MainActor-isolated, so capturing self in a plain
+    // Task closure is rejected. `Task { @MainActor [weak self] in }`
+    // is the pattern this file already uses elsewhere (e.g. the
+    // latency/timeout tasks) and keeps the hop on the main actor.
+    nonisolated func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { Task { @MainActor [weak self] in self?.isPiPActive = true } }
+    nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) { Task { @MainActor [weak self] in self?.isPiPActive = false } }
     nonisolated func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {}
-    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { Task { [weak self] in await MainActor.run { guard let self else { return }; self.isPiPActive = false; if self.viewDetached { self.stop() } } } }
+    nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { Task { @MainActor [weak self] in guard let self else { return }; self.isPiPActive = false; if self.viewDetached { self.stop() } } }
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void) { completionHandler(true) }
 }
 

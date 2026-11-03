@@ -659,6 +659,30 @@ struct AddPlaylistButton: View {
     let title: String
     let action: () -> Void
 
+    // Compile-fix round: CI reported the line-508 call as having
+    // extra arguments (#7/#8/#9/#10/#12) and missing `action`, even
+    // though the call matches the memberwise initializer parameter
+    // for parameter. An explicit initializer with exactly the call's
+    // signature removes any synthesis ambiguity; a future mismatch
+    // will then surface as a plain type error instead of a
+    // misleading extra/missing-argument diagnostic. Defaults match
+    // the previous memberwise defaults, and line 508 is the only
+    // call site, so no other construction is affected.
+    init(name: String, source: String, url: String, username: String, password: String, isSaving: Bool, isEditing: Bool = false, hasStoredPassword: Bool = false, isEditingLocal: Bool = false, localFileSelected: Bool = false, title: String, action: @escaping () -> Void) {
+        self.name = name
+        self.source = source
+        self.url = url
+        self.username = username
+        self.password = password
+        self.isSaving = isSaving
+        self.isEditing = isEditing
+        self.hasStoredPassword = hasStoredPassword
+        self.isEditingLocal = isEditingLocal
+        self.localFileSelected = localFileSelected
+        self.title = title
+        self.action = action
+    }
+
     var body: some View {
         Button(action: action) {
             ZStack {

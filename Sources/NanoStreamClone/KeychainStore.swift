@@ -23,7 +23,10 @@ enum KeychainStore {
     @discardableResult
     static func savePassword(_ password: String, for playlistID: UUID) -> Bool {
         guard !password.isEmpty else { deletePassword(for: playlistID); return true }
-        return save(Data(password.utf8), service: service, account: playlistID.uuidString, verify: { password(for: playlistID) == password })
+        // Compile-fix round: the parameter `password` shadows the
+        // static helper password(for:), so the unqualified call
+        // resolved to the String value. Qualify with the type name.
+        return save(Data(password.utf8), service: service, account: playlistID.uuidString, verify: { KeychainStore.password(for: playlistID) == password })
     }
 
     static func password(for playlistID: UUID) -> String? {

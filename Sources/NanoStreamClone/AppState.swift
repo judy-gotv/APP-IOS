@@ -61,6 +61,39 @@ final class AppState: ObservableObject {
         guard Date().timeIntervalSince(noticeDate) < 30 else { return nil }
         return notice
     }
+    /// Home-visible proxy authentication warning, or nil when the proxy
+    /// looks usable. Round-7 fix (C04): the no-password and
+    /// migration-failure warnings used to render only on the settings
+    /// page, so a refresh from the home/detail page that hit a 407
+    /// showed only a generic load error. The home error bar now also
+    /// shows this text (same conditions and wording as the settings
+    /// warnings, so the two surfaces cannot disagree).
+    /// Compile-fix round: this property used to live on enum M3UParser,
+    /// where it could neither call AppState's instance method
+    /// localized(_:) nor be reached as state.proxyAuthWarning from
+    /// ContentView — both are AppState members, so the property lives
+    /// here now. Logic unchanged.
+    var proxyAuthWarning: String? {
+        let raw = UserDefaults.standard.string(forKey: "httpProxy") ?? ""
+        guard let parsed = M3UParser.parseProxy(raw) else { return nil }
+        // Round-12 fix (A01): the migration-failure warning fires only
+        // for the identity that actually failed. A stale flag from a
+        // previous identity must not be blamed on the identity now in
+        // the field — with round-11 deferred saving, a background
+        // refresh during an edit never attempts a write, so without
+        // this scoping the old warning would linger against a password
+        // that was never tried. (A nil failed identity still warns, as
+        // a defensive fallback; see proxyMigrationFailedIdentity.)
+        if M3UParser.proxyMigrationFailed, parsed.password != nil,
+           M3UParser.proxyMigrationFailedIdentity == nil || M3UParser.proxyMigrationFailedIdentity == M3UParser.canonicalProxy(host: parsed.host, port: parsed.port, username: parsed.username) {
+            return localized("代理密码未能存入钥匙串，仍以明文保存在本地。请重新输入代理密码。")
+        }
+        if let user = parsed.username, !user.isEmpty, parsed.password == nil,
+           KeychainStore.proxyPassword(forProxy: M3UParser.canonicalProxy(host: parsed.host, port: parsed.port, username: user)) == nil {
+            return localized("代理已填写用户名但未提供密码，请求将以无认证方式发出。请补全密码或清除用户名。")
+        }
+        return nil
+    }
     /// Sets a notice and stamps it, so its 30-second display window
     /// starts at the moment it is produced, not at some later render.
     /// Pass isError: true for failure notices, which must not expire
@@ -1984,35 +2017,6 @@ enum M3UParser {
         cachedSession = nil
         cachedSessionKey = nil
     }
-    /// Home-visible proxy authentication warning, or nil when the proxy
-    /// looks usable. Round-7 fix (C04): the no-password and
-    /// migration-failure warnings used to render only on the settings
-    /// page, so a refresh from the home/detail page that hit a 407
-    /// showed only a generic load error. The home error bar now also
-    /// shows this text (same conditions and wording as the settings
-    /// warnings, so the two surfaces cannot disagree).
-    var proxyAuthWarning: String? {
-        let raw = UserDefaults.standard.string(forKey: "httpProxy") ?? ""
-        guard let parsed = M3UParser.parseProxy(raw) else { return nil }
-        // Round-12 fix (A01): the migration-failure warning fires only
-        // for the identity that actually failed. A stale flag from a
-        // previous identity must not be blamed on the identity now in
-        // the field — with round-11 deferred saving, a background
-        // refresh during an edit never attempts a write, so without
-        // this scoping the old warning would linger against a password
-        // that was never tried. (A nil failed identity still warns, as
-        // a defensive fallback; see proxyMigrationFailedIdentity.)
-        if M3UParser.proxyMigrationFailed, parsed.password != nil,
-           M3UParser.proxyMigrationFailedIdentity == nil || M3UParser.proxyMigrationFailedIdentity == M3UParser.canonicalProxy(host: parsed.host, port: parsed.port, username: parsed.username) {
-            return localized("代理密码未能存入钥匙串，仍以明文保存在本地。请重新输入代理密码。")
-        }
-        if let user = parsed.username, !user.isEmpty, parsed.password == nil,
-           KeychainStore.proxyPassword(forProxy: M3UParser.canonicalProxy(host: parsed.host, port: parsed.port, username: user)) == nil {
-            return localized("代理已填写用户名但未提供密码，请求将以无认证方式发出。请补全密码或清除用户名。")
-        }
-        return nil
-    }
-
     /// Moves a password embedded in the stored "httpProxy" value into
     /// the Keychain and rewrites the stored value without it. Idempotent:
     /// a value with no embedded password is left untouched, and a failed
@@ -2322,7 +2326,11 @@ enum M3UParser {
                 // it happens to parse to zero channels (which used to be
                 // misreported as "empty playlist").
                 if trimmed.hasPrefix("<") || trimmed.hasPrefix("{") { throw PlaylistLoadError.invalidFormat }
-                let report = await Task.detached(priority: .userInitiated) { parseReport(text: text, baseURL: url) }.value
+                // Compile-fix round: Task.detached's closure runs
+                // concurrently, so it must not capture the mutable
+                // local `url`; copy it to a let first.
+                let reportBaseURL = url
+                let report = await Task.detached(priority: .userInitiated) { parseReport(text: text, baseURL: reportBaseURL) }.value
                 guard !report.channels.isEmpty else { throw PlaylistLoadError.empty }
                 return report.channels
             } catch let error as PlaylistLoadError {

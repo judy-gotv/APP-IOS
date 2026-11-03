@@ -102,7 +102,7 @@ private final class XMLTVParserDelegate: NSObject, XMLParserDelegate {
         ["yyyyMMddHHmmss", "yyyyMMddHHmm", "yyyyMMddHH"].map { format in
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.calendar = Calendar(identifier: "gregorian")
+            formatter.calendar = Calendar(identifier: .gregorian)
             formatter.dateFormat = format
             return formatter
         }
@@ -283,9 +283,13 @@ private final class XMLTVParserDelegate: NSObject, XMLParserDelegate {
         // Missing zone: XMLTV times are UTC by convention. Previously the
         // device time zone was silently substituted, shifting every programme
         // when the source and the device disagreed.
-        let timeZone = zoneText.flatMap { timeZone(from: $0) } ?? TimeZone(secondsFromGMT: 0)
+        // Compile-fix round: the local `timeZone` shadowed the static
+        // helper timeZone(from:) inside its own initializer closure,
+        // so the call resolved to the (not yet initialized) TimeZone?
+        // value instead of the helper. Renamed local, logic unchanged.
+        let resolvedTimeZone = zoneText.flatMap { timeZone(from: $0) } ?? TimeZone(secondsFromGMT: 0)
         for formatter in formatters {
-            formatter.timeZone = timeZone
+            formatter.timeZone = resolvedTimeZone
             if let date = formatter.date(from: value) { return date }
         }
         return nil
