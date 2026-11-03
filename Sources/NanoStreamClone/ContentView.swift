@@ -1803,13 +1803,15 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
 
     private static func codecName(for descriptions: [Any]) -> String? {
         guard let first = descriptions.first else { return nil }
-        // Compile-fix round: a conditional downcast to the Core
-        // Foundation type CMFormatDescription is rejected (it is
-        // treated as always succeeding). Keep the original intent —
-        // return nil for a non-CMFormatDescription — with an `is`
-        // check followed by an unconditional cast.
+        // Compile-fix round 2: a conditional downcast (`as?`) to the
+        // Core Foundation type CMFormatDescription is rejected (it is
+        // treated as always succeeding), and a plain `as` is rejected
+        // because `first` is `Any`. Keep the original intent — return
+        // nil for a non-CMFormatDescription — with an `is` check
+        // followed by the compiler-suggested forced cast, which cannot
+        // fail after the check above.
         guard first is CMFormatDescription else { return nil }
-        let description = first as CMFormatDescription
+        let description = first as! CMFormatDescription
         let code = CMFormatDescriptionGetMediaSubType(description)
         let bytes: [UInt8] = [UInt8((code >> 24) & 0xff), UInt8((code >> 16) & 0xff), UInt8((code >> 8) & 0xff), UInt8(code & 0xff)]
         return String(bytes: bytes, encoding: .ascii)?.trimmingCharacters(in: .whitespacesAndNewlines)
