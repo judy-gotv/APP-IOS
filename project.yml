@@ -1,7 +1,7 @@
 name: NanoStreamClone
 
 options:
-  xcodeVersion: "15.0"
+  xcodeVersion: "15.4"
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
@@ -24,10 +24,6 @@ targets:
     platform: iOS
     sources:
       - path: Sources/NanoStreamClone
-        excludes:
-          - Reference/**
-    resources:
-      - path: Sources/NanoStreamClone/Reference
     dependencies:
       - package: KSPlayer
     settings:
@@ -36,4 +32,5 @@ targets:
         INFOPLIST_FILE: Resources/AppInfo.plist
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
-        SWIFT_EMIT_LOC_STRINGS: YES
+        # SWIFT_EMIT_LOC_STRINGS removed: localization is a hand-written
+    # dictionary in AppState.localized(_:), not String Catalog extraction.

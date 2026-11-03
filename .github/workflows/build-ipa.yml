@@ -1,9 +1,27 @@
-name: Build IPA
+name: Build unsigned test bundle
 
+# Unsigned test package only: this workflow deliberately does NOT use
+# archive/exportArchive with signing, because no Apple Developer signing
+# is configured yet (see NANOSTREAM_TASKS.md). The artifact is a hand-packed
+# .app in a Payload folder inside a .zip, NOT an installable IPA for a
+# normal iPhone. Do not present it to users as installable.
 on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - 'Sources/**'
+      - 'Resources/**'
+      - 'project.yml'
+      - 'Package.swift'
+      # Round-3 fix: changes to the workflow itself (Xcode version,
+      # packaging steps) previously never triggered CI, so they went
+      # unverified.
+      - '.github/workflows/**'
+
+concurrency:
+  group: build-ipa-main
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -18,18 +36,50 @@ jobs:
           xcode-version: '15.4'
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: |
+          brew install xcodegen
+          # Record the exact toolchain so a future "same commit, different
+          # result" can be traced. XcodeGen is intentionally NOT pinned to a
+          # formula version here because brew has no stable versioned
+          # formula for it; the version line above is the audit trail.
+          xcodegen --version
+          xcodebuild -version
 
       - name: Generate Xcode project
         run: |
+          set -euo pipefail
           xcodegen generate --spec project.yml
+          # Fail loudly if XcodeGen's output format changes instead of
+          # silently sed-editing the wrong lines.
+          if ! grep -q 'objectVersion = 77' NanoStreamClone.xcodeproj/project.pbxproj; then
+            echo "::error::Expected objectVersion = 77 in generated project; XcodeGen output changed, update this step instead of guessing."
+            grep 'objectVersion' NanoStreamClone.xcodeproj/project.pbxproj || true
+            exit 1
+          fi
           # XcodeGen may emit the newest project format; Xcode 15.4 accepts objectVersion 60.
           sed -i '' 's/objectVersion = 77/objectVersion = 60/' NanoStreamClone.xcodeproj/project.pbxproj
           sed -i '' '/preferredProjectObjectVersion = 77;/d' NanoStreamClone.xcodeproj/project.pbxproj
+          grep -q 'objectVersion = 60' NanoStreamClone.xcodeproj/project.pbxproj
+
+      - name: Verify dependencies
+        run: |
+          set -euo pipefail
+          # Fail here with a clear message if KSPlayer resolution changes,
+          # instead of burying it in build.log.
+          grep -q 'KSPlayer' NanoStreamClone.xcodeproj/project.pbxproj || { echo "::error::KSPlayer is missing from the generated project (expected version 2.3.4 per project.yml)."; exit 1; }
+          # Round-3 fix: the version check used to be a soft warning while
+          # the objectVersion check above is a hard failure, so a KSPlayer
+          # version drift shipped with only a warning. It now fails too.
+          grep -q '2.3.4' NanoStreamClone.xcodeproj/project.pbxproj || { echo "::error::KSPlayer version string 2.3.4 not found verbatim in project.pbxproj; check the resolved SPM version in the build log."; exit 1; }
 
       - name: Build unsigned app
         run: |
           set -o pipefail
+          mkdir -p build
+          # Per-build CFBundleVersion (run number) so artifacts are
+          # distinguishable without changing the repo's plist version
+          # (the repo version is only bumped at release time, by hand).
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Resources/AppInfo.plist
           xcodebuild build \
             -project NanoStreamClone.xcodeproj \
             -scheme NanoStreamClone \
@@ -39,25 +89,47 @@ jobs:
             PRODUCT_BUNDLE_IDENTIFIER=com.k20.nanostream.clone \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            | tee build.log
+            | tee build/build.log
 
-      - name: Package IPA
+      - name: Package unsigned test bundle
         run: |
           set -euo pipefail
           APP_PATH="build/Products/NanoStreamClone.app"
           test -d "$APP_PATH"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist"
-          /usr/bin/codesign --display --verbose=2 "$APP_PATH" 2>&1 || true
+          # codesign --display is informational for an unsigned app; do NOT
+          # hide a real verification failure behind `|| true`. The unsigned
+          # status is stated explicitly in the notice file below instead.
+          /usr/bin/codesign --display --verbose=2 "$APP_PATH" 2>&1 || echo "NOTE: app is unsigned, as expected for this test package."
+          # Payload must not contain the reverse-engineering reference files.
+          if find "$APP_PATH" -name 'NanoStream-Info.plist' -o -name 'KSPlayer-default.metallib' | grep -q .; then
+            echo "::error::Reference files leaked into the app bundle."
+            exit 1
+          fi
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "com.k20.nanostream.clone"
           mkdir -p build/Payload
           cp -R "$APP_PATH" build/Payload/
+          cat > build/UNSIGNED_NOTICE.txt <<'EOF'
+          This is an UNSIGNED test package produced by CI.
+          It cannot be installed on a normal iPhone and is only for
+          unpacking/inspection. Signing with an Apple Developer certificate
+          is a separate, still-pending task (see NANOSTREAM_TASKS.md).
+          EOF
           cd build
-          /usr/bin/zip -qry NanoStreamClone-unsigned.ipa Payload
+          # Round-4 fix (A06): the notice used to travel as a separate
+          # artifact only, so anyone downloading just the .ipa never saw
+          # "unsigned, not installable". It now rides inside the package,
+          # and the package itself is a .zip, not a misleading .ipa.
+          /usr/bin/zip -qry "NanoStreamClone-unsigned-${{ github.sha }}.zip" Payload UNSIGNED_NOTICE.txt
+          shasum -a 256 "NanoStreamClone-unsigned-${{ github.sha }}.zip" > "NanoStreamClone-unsigned-${{ github.sha }}.zip.sha256"
 
-      - name: Upload IPA and logs
+      - name: Upload unsigned test bundle and logs
         uses: actions/upload-artifact@v4
         with:
-          name: NanoStreamClone-unsigned
+          name: NanoStreamClone-unsigned-${{ github.sha }}
           path: |
-            build/NanoStreamClone-unsigned.ipa
-            build.log
+            build/NanoStreamClone-unsigned-${{ github.sha }}.zip
+            build/NanoStreamClone-unsigned-${{ github.sha }}.zip.sha256
+            build/UNSIGNED_NOTICE.txt
+            build/build.log
