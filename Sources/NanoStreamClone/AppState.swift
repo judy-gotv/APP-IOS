@@ -274,26 +274,39 @@ final class AppState: ObservableObject {
            let decoded = try? JSONDecoder().decode([String].self, from: data) {
             groupOrder = decoded
         }
+        // Compile-fix round 3 (items 1-3): keep the decoded tags in a
+        // local as well — init may not read the @Published channelTags
+        // property before every stored property is initialized.
+        var storedChannelTags: [String: [String]] = [:]
         if let data = UserDefaults.standard.data(forKey: "nanostream.channelTags"),
            let decoded = try? JSONDecoder().decode([String: [String]].self, from: data) {
-            channelTags = decoded.mapValues { Channel.normalizedTags($0) }
+            storedChannelTags = decoded.mapValues { Channel.normalizedTags($0) }
+            channelTags = storedChannelTags
         }
         let initialEPGURL = UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? ""
         var restoreFailed = false
+        // Compile-fix round 3 (items 1-3): the epgURL derivation below
+        // may not read the @Published playlists / activePlaylistID
+        // properties before every stored property is initialized, so
+        // the restore keeps local copies for that computation.
+        var restoredPlaylists: [Playlist] = []
+        var restoredActivePlaylistID: UUID? = nil
         if let data = UserDefaults.standard.data(forKey: storageKey) {
             if let saved = Self.restore(data: data) {
                 // Init assignments never fire didSet, so wrap
                 // explicitly (see the channels declaration). The
                 // static form is used because instance methods cannot
                 // run before every stored property is initialized.
-                channels = Self.attachingStoredTags(saved.channels, tags: channelTags)
+                channels = Self.attachingStoredTags(saved.channels, tags: storedChannelTags)
                 playlists = saved.playlists
+                restoredPlaylists = saved.playlists
                 favorites = saved.favorites
                 recent = saved.recent
                 // Do not guess an active playlist: a saved id that no longer
                 // exists stays nil so the UI can prompt for a choice instead
                 // of showing another playlist's channels under its name.
-                activePlaylistID = saved.activePlaylistID.flatMap { id in saved.playlists.contains(where: { $0.id == id }) ? id : nil }
+                restoredActivePlaylistID = saved.activePlaylistID.flatMap { id in saved.playlists.contains(where: { $0.id == id }) ? id : nil }
+                activePlaylistID = restoredActivePlaylistID
                 channelSetsByPlaylist = saved.channelSetsByPlaylist ?? [:]
                 // A clean restore supersedes any backup from an earlier
                 // corrupt launch; delete the expired backup.
@@ -366,9 +379,13 @@ final class AppState: ObservableObject {
         // Dev round 4 (R4-03): same enabled-only rule as the
         // autoEPGURL computed property (inlined here because init
         // cannot call instance methods yet).
-        let enabledPlaylists = playlists.filter(\.isEnabled)
+        // Compile-fix round 3 (items 1-3): derive from the restore
+        // locals, not from the @Published properties — reading them
+        // here would still be phase 1, and the closure below would
+        // capture self before every stored property is initialized.
+        let enabledPlaylists = restoredPlaylists.filter(\.isEnabled)
         var autoFromPlaylists = enabledPlaylists.compactMap { $0.autoEPGURL }.first(where: { !$0.isEmpty }) ?? ""
-        if let active = enabledPlaylists.first(where: { $0.id == activePlaylistID })?.autoEPGURL, !active.isEmpty { autoFromPlaylists = active }
+        if let active = enabledPlaylists.first(where: { $0.id == restoredActivePlaylistID })?.autoEPGURL, !active.isEmpty { autoFromPlaylists = active }
         epgURL = initialEPGURL.isEmpty ? autoFromPlaylists : initialEPGURL
         epgDraftURL = UserDefaults.standard.string(forKey: epgDraftCacheKey) ?? initialEPGURL
         epgRefreshIntervalMinutes = Self.intValue(forKey: "nanostream.epgRefreshIntervalMinutes") ?? 0
