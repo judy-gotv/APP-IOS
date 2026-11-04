@@ -23,6 +23,7 @@
 	<key>UIDeviceFamily</key>
 	<array>
 		<integer>1</integer>
+		<integer>2</integer>
 	</array>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
@@ -43,5 +44,31 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Dev round 10 (D-05) + dev round 17 (R17-01): CarPlay
+	     template scene. The delegate class lives in
+	     CarPlayScene.swift (iOS-only, guarded by canImport(CarPlay)).
+	     No separate video scene role exists: video browsing UI
+	     reuses this same template scene role (verified from
+	     public CarPlay docs — the 26.4 video mechanism is AirPlay
+	     video, and the iOS 27 video app category is a template
+	     app, not a new scene role), so no new scene entry is
+	     added here. Video is gated on iOS 26.4+ (see that file).
+	     UNVERIFIED without CarPlay entitlements + real car or
+	     simulator run — see the report's verification list. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>CPTemplateApplicationSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>实时字幕需要语音识别权限，用于识别直播流音频并生成字幕。</string>
 </dict>
 </plist>

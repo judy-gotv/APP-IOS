@@ -1,13 +1,37 @@
 import Foundation
 import AVFoundation
 import SwiftUI
+// Dev round 10 (D-03): UIKit does not exist on macOS; the one
+// UIKit use below (foreground check) is guarded the same way.
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 final class AppState: ObservableObject {
-    @Published var channels: [Channel] { didSet { cachedGroups = nil } }
+    // Dev round 8 (R8-08): re-attaching stored tags here covers the
+    // active snapshot (detail page, prev/next) no matter which commit
+    // path wrote it. Assigning inside didSet does not re-trigger the
+    // observer, so this cannot recurse; init assignments never fire
+    // didSet at all, so the restore block wraps explicitly.
+    @Published var channels: [Channel] { didSet { cachedGroups = nil; channels = attachingStoredTags(channels)
+        // Dev round 10 (D-05): keep the CarPlay list in step with the
+        // phone list. Guarded: the CarPlay store only exists where
+        // the CarPlay framework is importable (iOS).
+        #if canImport(CarPlay)
+        CarPlayChannelStore.shared.update(channels)
+        #endif
+    } }
     @Published var playlists: [Playlist]
-    @Published var favorites: Set<String>
-    @Published var recent: [String]
+    @Published var favorites: Set<String> { didSet {
+        // Dev round 10 (D-05): keep the CarPlay favorite section in
+        // step. Init assignments never fire didSet, so the car list
+        // refreshes on the next channels update after launch.
+        #if canImport(CarPlay)
+        CarPlayChannelStore.favoriteIDs = favorites
+        #endif
+    } }
+    @Published var recent: [RecentEntry]
     @Published var selectedChannel: Channel?
     @Published var selectedGroup = GroupID.all
     @Published var searchText = ""
@@ -18,6 +42,11 @@ final class AppState: ObservableObject {
     @Published var colorTheme: String
     @Published var preferredPlayer: PreferredPlayer
     @Published var networkBufferMilliseconds: Double
+    // Dev round 2 (R2-11): user-adjustable request timeouts, persisted
+    // in UserDefaults (nanostream.m3uTimeout / nanostream.epgTimeout).
+    // Defaults 30s (playlist) / 45s (EPG) match the old hardcoded values.
+    @Published var m3uTimeoutSeconds: Double
+    @Published var epgTimeoutSeconds: Double
     @Published var gridLayout: GridLayout
     @Published var pictureInPicture: Bool
     @Published var hardwareAcceleration: Bool
@@ -31,7 +60,86 @@ final class AppState: ObservableObject {
     @Published private(set) var isLoadingEPG = false
     @Published private(set) var epgError: String?
     @Published var previewEnabled: Bool
+    // Dev round 6 (R6-05): search history, most recent first, max 10,
+    // persisted in UserDefaults. Recorded only on submit, never on
+    // every keystroke.
+    @Published var searchHistory: [String] = []
+    // Dev round 6 (R6-07): adjustable preview concurrency, default 4,
+    // clamped 1...8. PreviewSessionPool reads the same key live.
+    @Published var previewLimit: Int = 4
+    // Dev round 6 (R6-09): probed resolution labels keyed by channel
+    // id, recorded only when a real player reports a video size.
+    // Never guessed from the channel name; only used when the source
+    // gave no quality attribute.
+    @Published var probedQualityByChannelID: [String: String] = [:]
+    // Dev round 8 (R8-03): global AV bitrate cap in bits per second;
+    // 0 means unlimited (the AVPlayer default). Applied to every new
+    // AVPlayerItem in PlaybackItemFactory.makeItem; the in-player
+    // bitrate menu still overrides it for the current item only.
+    // KSPlayer has no verified cap API, so the setting is AV-only
+    // (the settings caption says so).
+    @Published var globalBitrateCap: Double = 0
+    // Dev round 8 (R8-10): AV not-ready timeout in seconds. Default 15
+    // matches the old hardcoded value; clamped 5...60 by the setter.
+    @Published var playbackNotReadyTimeout: Double = 15
+    // Dev round 8 (R8-09): deinterlacing switch. Wired into KSPlayer
+    // via KSOptions.deinterlace (CI-verification item, same precedent
+    // as textFont/userAgent); AVPlayer uses the system default
+    // decoding and has no such switch, so the setting never claims
+    // to affect it (see the settings caption).
+    @Published var deinterlace: Bool = false
+    // Dev round 8 (R8-07): hidden groups (home display only, never
+    // deletes data) and the user-arranged group order. Both persist
+    // as JSON arrays in UserDefaults.
+    @Published var hiddenGroups: Set<String> = []
+    @Published var groupOrder: [String] = []
+    // Dev round 8 (R8-08): user-assigned tags keyed by channel id,
+    // the source of truth. Re-attached to every channel list after
+    // each refresh, so a re-parse never wipes them; import never
+    // fabricates tags (a fresh channel simply has none).
+    @Published var channelTags: [String: [String]] = [:]
+    // Dev round 8 (R8-08): home tag filter, session-only (not
+    // persisted): nil means no tag filter.
+    @Published var selectedTag: String? = nil
     @Published var showLatency: Bool
+    // Dev round 10 (D-01): lab switches, all persisted. Defaults
+    // match the reference: only multi-bitrate preselect defaults ON.
+    // Every one of these is wired to real behaviour (see LabServices
+    // and the detail page); a stored-but-unwired switch does not
+    // count as done in this codebase.
+    @Published var labMulticastFCC: Bool = false
+    @Published var labHLSVariantPreselect: Bool = true
+    @Published var labReplayPLTVToTVOD: Bool = false
+    @Published var labEnhancedSystemPlayer: Bool = false
+    @Published var labMetalRendering: Bool = false
+    // Dev round 10 (D-02): subtitle translation. Base URLs are plain
+    // settings (not secrets); keys live in KeychainStore only.
+    // Translation is OFF by default: with no subtitle track there is
+    // nothing to translate, and an enabled-but-unconfigured source
+    // must never invent subtitles.
+    @Published var subtitleTranslationEnabled: Bool = false
+    // Dev round 19 (T-01): translation mode choice. Default
+    // subtitle: existing subtitle-translation users keep exactly
+    // their old behaviour; listen mode only changes the translation
+    // input source (recognised audio -> translated captions).
+    @Published var translationMode: TranslationMode = .subtitle
+    @Published var translationEngine: TranslationEngine = .system
+    @Published var translateAPIBaseURL: String = ""
+    @Published var translateAIBaseURL: String = ""
+    @Published var translateAIModel: String = ""
+    // Dev round 10 (D-07): live subtitles. Experimental: default OFF,
+    // entry lives on the lab page. Endpoint storage shares D-02's
+    // approach (URLs in UserDefaults, keys in KeychainStore) but
+    // keeps separate accounts per purpose.
+    @Published var liveSubtitleEnabled: Bool = false
+    @Published var liveSubtitleEngine: LiveSubtitleEngine = .system
+    @Published var liveSubAPIBaseURL: String = ""
+    @Published var liveSubAIBaseURL: String = ""
+    @Published var liveSubAIModel: String = ""
+    // Dev round 10 (D-04): iCloud key-value sync opt-out. Default ON:
+    // syncing only happens when an iCloud environment actually
+    // exists; without one the app silently stays local.
+    @Published var iCloudSyncEnabled: Bool = true
     /// Non-error notice channel (e.g. "image cache cleared"). Success messages
     /// used to be written into playlistError, which both hid real errors and
     /// rendered success text in the error style.
@@ -145,11 +253,37 @@ final class AppState: ObservableObject {
     private let storageKey = "nanostream.state.v4"
 
     init() {
+        // Dev round 8: load the tag/group/bitrate/timeout/deinterlace
+        // settings BEFORE the restore block below, because the
+        // restore wraps channels through attachingStoredTags (which
+        // reads channelTags) and the funnel properties read the rest.
+        // Stored 0 means unset for the numeric settings (old default).
+        let storedBitrate = UserDefaults.standard.double(forKey: "nanostream.globalBitrateCap")
+        globalBitrateCap = storedBitrate > 0 ? storedBitrate : 0
+        let storedNotReady = UserDefaults.standard.double(forKey: "nanostream.playbackNotReadyTimeout")
+        playbackNotReadyTimeout = storedNotReady > 0 ? min(max(storedNotReady, 5), 60) : 15
+        deinterlace = Self.boolValue(forKey: "nanostream.deinterlace") ?? false
+        if let data = UserDefaults.standard.data(forKey: "nanostream.hiddenGroups"),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            hiddenGroups = Set(decoded)
+        }
+        if let data = UserDefaults.standard.data(forKey: "nanostream.groupOrder"),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            groupOrder = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: "nanostream.channelTags"),
+           let decoded = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            channelTags = decoded.mapValues { Channel.normalizedTags($0) }
+        }
         let initialEPGURL = UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? ""
         var restoreFailed = false
         if let data = UserDefaults.standard.data(forKey: storageKey) {
             if let saved = Self.restore(data: data) {
-                channels = saved.channels
+                // Init assignments never fire didSet, so wrap
+                // explicitly (see the channels declaration). The
+                // static form is used because instance methods cannot
+                // run before every stored property is initialized.
+                channels = Self.attachingStoredTags(saved.channels, tags: channelTags)
                 playlists = saved.playlists
                 favorites = saved.favorites
                 recent = saved.recent
@@ -211,11 +345,28 @@ final class AppState: ObservableObject {
             defaults.set(true, forKey: "nanostream.ksPlayerDefault.v1")
         }
         networkBufferMilliseconds = Self.clampedBuffer(Self.doubleValue(forKey: "nanostream.buffer") ?? 3000)
+        // Dev round 2 (R2-11): adjustable timeouts; a stored value of 0
+        // or less is ignored in favour of the old hardcoded defaults.
+        m3uTimeoutSeconds = { let v = Self.doubleValue(forKey: "nanostream.m3uTimeout") ?? 0; return v > 0 ? v : 30 }()
+        epgTimeoutSeconds = { let v = Self.doubleValue(forKey: "nanostream.epgTimeout") ?? 0; return v > 0 ? v : 45 }()
         gridLayout = GridLayout(rawValue: UserDefaults.standard.string(forKey: "nanostream.grid") ?? GridLayout.twoColumns.rawValue) ?? .twoColumns
         pictureInPicture = Self.boolValue(forKey: "nanostream.pip") ?? true
         hardwareAcceleration = Self.boolValue(forKey: "nanostream.hardwareAcceleration") ?? true
         automaticAudioSelection = Self.boolValue(forKey: "nanostream.automaticAudioSelection") ?? true
-        epgURL = initialEPGURL
+        // Dev round 2 (R2-13): no manual guide URL -> fall back to the
+        // x-tvg-url carried by a playlist header (same rule as the
+        // autoEPGURL computed property, inlined here because init
+        // cannot call instance methods yet — playlists and
+        // activePlaylistID are already assigned by the restore block
+        // above). The persisted key keeps the MANUAL value only, so
+        // deleting the manual value later re-exposes the automatic one.
+        // Dev round 4 (R4-03): same enabled-only rule as the
+        // autoEPGURL computed property (inlined here because init
+        // cannot call instance methods yet).
+        let enabledPlaylists = playlists.filter(\.isEnabled)
+        var autoFromPlaylists = enabledPlaylists.compactMap { $0.autoEPGURL }.first(where: { !$0.isEmpty }) ?? ""
+        if let active = enabledPlaylists.first(where: { $0.id == activePlaylistID })?.autoEPGURL, !active.isEmpty { autoFromPlaylists = active }
+        epgURL = initialEPGURL.isEmpty ? autoFromPlaylists : initialEPGURL
         epgDraftURL = UserDefaults.standard.string(forKey: epgDraftCacheKey) ?? initialEPGURL
         epgRefreshIntervalMinutes = Self.intValue(forKey: "nanostream.epgRefreshIntervalMinutes") ?? 0
         epgLastUpdated = UserDefaults.standard.object(forKey: "nanostream.epgLastUpdated") as? Date
@@ -251,8 +402,37 @@ final class AppState: ObservableObject {
             // A stale "last updated" timestamp with no guide is misleading.
             epgLastUpdated = nil
         }
-        previewEnabled = Self.boolValue(forKey: "nanostream.previewEnabled") ?? false
+        // Dev round 6 (R6-06): previews default ON for new installs;
+        // an explicit stored value still wins.
+        previewEnabled = Self.boolValue(forKey: "nanostream.previewEnabled") ?? true
+        searchHistory = UserDefaults.standard.stringArray(forKey: "nanostream.searchHistory") ?? []
+        previewLimit = Self.clampedPreviewLimit(UserDefaults.standard.integer(forKey: "nanostream.previewLimit"))
+        if let data = UserDefaults.standard.data(forKey: "nanostream.probedQuality"),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            probedQualityByChannelID = decoded
+        }
         showLatency = Self.boolValue(forKey: "nanostream.showLatency") ?? false
+        // Dev round 10: restore the lab / translation / live-subtitle
+        // / iCloud settings. boolValue returns nil when absent, so
+        // fresh installs keep the declared defaults (preselect ON,
+        // everything else OFF, iCloud ON).
+        labMulticastFCC = Self.boolValue(forKey: "nanostream.lab.multicastFCC") ?? false
+        labHLSVariantPreselect = Self.boolValue(forKey: "nanostream.lab.hlsPreselect") ?? true
+        labReplayPLTVToTVOD = Self.boolValue(forKey: "nanostream.lab.replayPLTV") ?? false
+        labEnhancedSystemPlayer = Self.boolValue(forKey: "nanostream.lab.enhancedAV") ?? false
+        labMetalRendering = Self.boolValue(forKey: "nanostream.lab.metal") ?? false
+        subtitleTranslationEnabled = Self.boolValue(forKey: "nanostream.translate.enabled") ?? false
+        translationMode = TranslationMode(rawValue: UserDefaults.standard.string(forKey: "nanostream.translate.mode") ?? "") ?? .subtitle
+        translationEngine = TranslationEngine(rawValue: UserDefaults.standard.string(forKey: "nanostream.translate.engine") ?? "") ?? .system
+        translateAPIBaseURL = UserDefaults.standard.string(forKey: "nanostream.translate.apiBaseURL") ?? ""
+        translateAIBaseURL = UserDefaults.standard.string(forKey: "nanostream.translate.aiBaseURL") ?? ""
+        translateAIModel = UserDefaults.standard.string(forKey: "nanostream.translate.aiModel") ?? ""
+        liveSubtitleEnabled = Self.boolValue(forKey: "nanostream.livesub.enabled") ?? false
+        liveSubtitleEngine = LiveSubtitleEngine(rawValue: UserDefaults.standard.string(forKey: "nanostream.livesub.engine") ?? "") ?? .system
+        liveSubAPIBaseURL = UserDefaults.standard.string(forKey: "nanostream.livesub.apiBaseURL") ?? ""
+        liveSubAIBaseURL = UserDefaults.standard.string(forKey: "nanostream.livesub.aiBaseURL") ?? ""
+        liveSubAIModel = UserDefaults.standard.string(forKey: "nanostream.livesub.aiModel") ?? ""
+        iCloudSyncEnabled = Self.boolValue(forKey: "nanostream.icloud.enabled") ?? true
         // (moved) Cached channels for the active playlist: this reads
         // self properties, so it must run after every stored property
         // has been assigned (see below); it used to sit inside the
@@ -310,6 +490,14 @@ final class AppState: ObservableObject {
             reloadEPG()
             startEPGRefreshLoop()
         }
+        // Dev round 10 (D-04): start iCloud observation at the end of
+        // init (all stored properties are assigned by now). The
+        // initial pull and every external change route through
+        // applyICloudSnapshot, which ignores stale remotes.
+        ICloudSync.shared.start { [weak self] snapshot in
+            self?.applyICloudSnapshot(snapshot)
+        }
+        if iCloudSyncEnabled { ICloudSync.shared.pullInitial(into: self) }
     }
 
     /// Maps legacy color-theme storage values (a mix of an English name and
@@ -410,20 +598,84 @@ final class AppState: ObservableObject {
         for channel in ordered where seen.insert(channel.id).inserted {
             result.append(channel)
         }
-        return result
+        // Dev round 8 (R8-08): same tag attach as homeChannels, so
+        // favorites, history and channel(for:) all see stored tags.
+        return attachingStoredTags(result)
+    }
+
+    /// Dev round 2 (R2-12): home browsing merges every ENABLED playlist
+    /// (playlist order wins on id collisions, same rule as allChannels).
+    /// Disabled playlists are excluded here only — favorites, history
+    /// and per-playlist detail browsing still resolve via allChannels.
+    /// Legacy saves with no per-playlist cache fall back to `channels`
+    /// (the old flat snapshot) so the grid is never emptied by the merge.
+    /// Dev round 4 (R4-02): the flat snapshot belongs to the active
+    /// playlist, so the fallback filters it too: when the active
+    /// playlist is disabled, the fallback returns nothing instead of
+    /// leaking that playlist's channels onto the home grid (previously
+    /// the enable switch did nothing until a refresh filled the
+    /// cache). No active playlist means a legacy snapshot with no
+    /// owner to filter against, so it is returned as before.
+    var homeChannels: [Channel] {
+        // Dev round 8 (R8-07/R8-08): hidden groups never reach the
+        // home grid (favorites, history and detail browsing still use
+        // allChannels), and stored tags are attached on the way out
+        // so a re-parse never strips them from display.
+        if channelSetsByPlaylist.isEmpty {
+            if let active = activePlaylistID, playlists.first(where: { $0.id == active })?.isEnabled == false { return [] }
+            return attachingStoredTags(channels.filter { !hiddenGroups.contains($0.group) })
+        }
+        var seen = Set<String>()
+        var result: [Channel] = []
+        for playlist in playlists where playlist.isEnabled {
+            for channel in channelSetsByPlaylist[playlist.id] ?? [] where seen.insert(channel.id).inserted {
+                result.append(channel)
+            }
+        }
+        return attachingStoredTags(result.filter { !hiddenGroups.contains($0.group) })
+    }
+
+    /// Dev round 2 (R2-12): home group menu, taken from the merged
+    /// enabled lists (not from the active playlist alone).
+    /// Dev round 8 (R8-07): hidden groups are excluded, and the
+    /// remaining groups follow the user-arranged groupOrder (groups
+    /// never arranged append sorted). The sentinel stays first.
+    var homeGroups: [String] {
+        let names = Set(homeChannels.map(\.group)).filter { $0 != GroupID.all }
+        let ordered = groupOrder.filter { names.contains($0) }
+        let rest = names.subtracting(ordered).sorted()
+        return [GroupID.all] + ordered + rest
+    }
+
+    /// Dev round 8 (R8-07/R8-08): every group the management UI can
+    /// show — visible groups from the merged lists plus hidden ones
+    /// (which homeChannels no longer contains), in arranged order.
+    var manageableGroups: [String] {
+        var names = Set(homeChannels.map(\.group))
+        names.formUnion(hiddenGroups)
+        names.remove(GroupID.all)
+        let ordered = groupOrder.filter { names.contains($0) }
+        let rest = names.subtracting(ordered).sorted()
+        return ordered + rest
     }
 
     var visibleChannels: [Channel] {
         // Loading no longer blanks the grid: callers show a spinner over the
         // previous (or empty) list, and a background refresh keeps its cache.
+        // Dev round 2 (R2-14): search covers every enabled playlist via
+        // homeChannels, not just the active one — searching another
+        // subscription used to return an empty (wrong) result.
+        // Dev round 8 (R8-08): the tag filter applies on top of the
+        // group/search filters; nil means no tag filter.
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return channels.filter { channel in
+        return homeChannels.filter { channel in
             (selectedGroup == GroupID.all || channel.group == selectedGroup) &&
+            (selectedTag == nil || channel.tags.contains(selectedTag!)) &&
             (query.isEmpty || channel.name.localizedCaseInsensitiveContains(query) || channel.group.localizedCaseInsensitiveContains(query))
         }
     }
 
-    var favoriteChannels: [Channel] { allChannels.filter { favorites.contains($0.id) } }
+    var favoriteChannels: [Channel] { allChannels.filter { isFavorite($0) } }
 
     var accent: Color {
         switch colorTheme {
@@ -439,6 +691,15 @@ final class AppState: ObservableObject {
         switch themeMode { case "Light": return .light; case "Dark": return .dark; default: return nil }
     }
 
+    // Dev round 8 (R8-01): the language options are exactly the
+    // languages the tables cover — English and Vietnamese in the
+    // main table, Traditional Chinese in its own table, Simplified
+    // Chinese as the key itself. The picker reads this list, so an
+    // option can never exist without translations; any key missing
+    // a translation still falls back to the Chinese key (see
+    // localized(_:)), never to a fabricated string.
+    static let supportedLanguages = ["English", "Tiếng Việt", "中文", "繁體中文"]
+
     func setLanguage(_ value: String) { language = value; UserDefaults.standard.set(value, forKey: "nanostream.language") }
     func setTheme(_ value: String) { themeMode = value; UserDefaults.standard.set(value, forKey: "nanostream.theme") }
     func setColorTheme(_ value: String) { colorTheme = value; UserDefaults.standard.set(value, forKey: "nanostream.colorTheme") }
@@ -449,7 +710,226 @@ final class AppState: ObservableObject {
     func setHardwareAcceleration(_ value: Bool) { hardwareAcceleration = value; UserDefaults.standard.set(value, forKey: "nanostream.hardwareAcceleration") }
     func setAutomaticAudioSelection(_ value: Bool) { automaticAudioSelection = value; UserDefaults.standard.set(value, forKey: "nanostream.automaticAudioSelection") }
     func setPreviewEnabled(_ value: Bool) { previewEnabled = value; UserDefaults.standard.set(value, forKey: "nanostream.previewEnabled") }
+
+    // Dev round 6 (R6-07): preview concurrency clamp. A stored 0 (key
+    // never set) means the default 4, matching the old hardcoded limit.
+    static func clampedPreviewLimit(_ value: Int) -> Int {
+        guard value > 0 else { return 4 }
+        return min(max(value, 1), 8)
+    }
+
+    func setPreviewLimit(_ value: Int) {
+        previewLimit = Self.clampedPreviewLimit(value)
+        UserDefaults.standard.set(previewLimit, forKey: "nanostream.previewLimit")
+    }
+
+    // Dev round 6 (R6-05): record one submitted search term, most
+    // recent first, deduplicated, capped at 10. Empty terms are never
+    // stored.
+    func recordSearchHistory(_ query: String) {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return }
+        searchHistory.removeAll { $0 == term }
+        searchHistory.insert(term, at: 0)
+        searchHistory = Array(searchHistory.prefix(10))
+        UserDefaults.standard.set(searchHistory, forKey: "nanostream.searchHistory")
+    }
+
+    func clearSearchHistory() {
+        searchHistory.removeAll()
+        UserDefaults.standard.removeObject(forKey: "nanostream.searchHistory")
+    }
+
+    // Dev round 6 (R6-02): batch removal for the favorites edit mode.
+    // Mirrors toggleFavorite's rollback: a failed save restores the
+    // whole set instead of leaving a half-deleted list.
+    func removeFavorites(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        let previous = favorites
+        favorites.subtract(ids)
+        if !save() { favorites = previous; saveError = localized("保存失败，数据未写入。") } else { saveError = nil }
+    }
+
+    // Dev round 6 (R6-09): record a probed resolution label for a
+    // channel, from a real player-reported video size. The class is
+    // taken from the smaller dimension (the "1080p/720p" convention),
+    // so a portrait 1080x1920 stream reads FHD, not 4K. A zero size
+    // (pure-audio stream) records nothing.
+    func recordProbedQuality(channelID: String, size: CGSize) {
+        guard size.width > 0 && size.height > 0 else { return }
+        let lines = min(size.width, size.height)
+        let label: String
+        if lines >= 2160 { label = "4K UHD" } else if lines >= 1080 { label = "FHD" } else if lines >= 720 { label = "HD" } else { label = "SD" }
+        guard probedQualityByChannelID[channelID] != label else { return }
+        probedQualityByChannelID[channelID] = label
+        if let data = try? JSONEncoder().encode(probedQualityByChannelID) {
+            UserDefaults.standard.set(data, forKey: "nanostream.probedQuality")
+        }
+    }
+
+    // Dev round 6 (R6-09): badge text for cards and rows. The source
+    // attribute always wins; the probe only fills the gap when the
+    // source gave nothing. Empty when neither exists — never guessed.
+    func displayQuality(for channel: Channel) -> String {
+        if !channel.quality.isEmpty { return channel.quality }
+        return probedQualityByChannelID[channel.id] ?? ""
+    }
+
+    // Dev round 6 (R6-10): real cache usage: URLCache memory + disk
+    // plus the EPG guide cache file. The saved library lives in
+    // UserDefaults, not a file, so it is not counted. Zero total
+    // renders as "no data", never as a fabricated number.
+    var cacheUsageText: String {
+        var total = URLCache.shared.currentMemoryUsage + URLCache.shared.currentDiskUsage
+        if let url = Self.epgGuideCacheFileURL(),
+           let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int {
+            total += size
+        }
+        guard total > 0 else { return localized("暂无数据") }
+        if total < 1024 { return "\(total) B" }
+        if total < 1024 * 1024 { return String(format: "%.1f KB", Double(total) / 1024) }
+        return String(format: "%.1f MB", Double(total) / Double(1024 * 1024))
+    }
     func setShowLatency(_ value: Bool) { showLatency = value; UserDefaults.standard.set(value, forKey: "nanostream.showLatency") }
+    // Dev round 10 (D-01/D-02/D-04/D-07): setters for the new
+    // settings. Booleans read back with boolValue (absent = nil, so
+    // the init defaults below win for fresh installs); strings read
+    // back verbatim (empty = unset).
+    func setLabMulticastFCC(_ value: Bool) { labMulticastFCC = value; UserDefaults.standard.set(value, forKey: "nanostream.lab.multicastFCC") }
+    func setLabHLSVariantPreselect(_ value: Bool) { labHLSVariantPreselect = value; UserDefaults.standard.set(value, forKey: "nanostream.lab.hlsPreselect") }
+    func setLabReplayPLTVToTVOD(_ value: Bool) { labReplayPLTVToTVOD = value; UserDefaults.standard.set(value, forKey: "nanostream.lab.replayPLTV") }
+    func setLabEnhancedSystemPlayer(_ value: Bool) { labEnhancedSystemPlayer = value; UserDefaults.standard.set(value, forKey: "nanostream.lab.enhancedAV") }
+    func setLabMetalRendering(_ value: Bool) { labMetalRendering = value; UserDefaults.standard.set(value, forKey: "nanostream.lab.metal") }
+    func setSubtitleTranslationEnabled(_ value: Bool) { subtitleTranslationEnabled = value; UserDefaults.standard.set(value, forKey: "nanostream.translate.enabled") }
+    func setTranslationMode(_ value: TranslationMode) { translationMode = value; UserDefaults.standard.set(value.rawValue, forKey: "nanostream.translate.mode") }
+    func setTranslationEngine(_ value: TranslationEngine) { translationEngine = value; UserDefaults.standard.set(value.rawValue, forKey: "nanostream.translate.engine") }
+    func setTranslateAPIBaseURL(_ value: String) { translateAPIBaseURL = value; UserDefaults.standard.set(value, forKey: "nanostream.translate.apiBaseURL") }
+    func setTranslateAIBaseURL(_ value: String) { translateAIBaseURL = value; UserDefaults.standard.set(value, forKey: "nanostream.translate.aiBaseURL") }
+    func setTranslateAIModel(_ value: String) { translateAIModel = value; UserDefaults.standard.set(value, forKey: "nanostream.translate.aiModel") }
+    func setLiveSubtitleEnabled(_ value: Bool) { liveSubtitleEnabled = value; UserDefaults.standard.set(value, forKey: "nanostream.livesub.enabled") }
+    func setLiveSubtitleEngine(_ value: LiveSubtitleEngine) { liveSubtitleEngine = value; UserDefaults.standard.set(value, forKey: "nanostream.livesub.engine") }
+    func setLiveSubAPIBaseURL(_ value: String) { liveSubAPIBaseURL = value; UserDefaults.standard.set(value, forKey: "nanostream.livesub.apiBaseURL") }
+    func setLiveSubAIBaseURL(_ value: String) { liveSubAIBaseURL = value; UserDefaults.standard.set(value, forKey: "nanostream.livesub.aiBaseURL") }
+    func setLiveSubAIModel(_ value: String) { liveSubAIModel = value; UserDefaults.standard.set(value, forKey: "nanostream.livesub.aiModel") }
+    func setICloudSyncEnabled(_ value: Bool) { iCloudSyncEnabled = value; UserDefaults.standard.set(value, forKey: "nanostream.icloud.enabled") }
+    /// Dev round 10 (D-02): the app language mapped to a translation
+    /// target code. Unknown values fall back to English, never to a
+    /// guessed language.
+    var translationTargetCode: String {
+        switch language {
+        case "中文": return "zh-Hans"
+        case "繁體中文": return "zh-Hant"
+        case "Tiếng Việt": return "vi"
+        default: return "en"
+        }
+    }
+
+    // Dev round 8 (R8-03): global AV bitrate cap. 0 means unlimited.
+    // Negative values are treated as unset, like the other numeric
+    // settings; the cap only ever travels to AVPlayerItem.
+    func setGlobalBitrateCap(_ bps: Double) {
+        globalBitrateCap = bps > 0 ? bps : 0
+        UserDefaults.standard.set(globalBitrateCap, forKey: "nanostream.globalBitrateCap")
+    }
+
+    // Dev round 8 (R8-10): not-ready timeout, clamped 5...60s.
+    func setPlaybackNotReadyTimeout(_ seconds: Double) {
+        playbackNotReadyTimeout = min(max(seconds, 5), 60)
+        UserDefaults.standard.set(playbackNotReadyTimeout, forKey: "nanostream.playbackNotReadyTimeout")
+    }
+
+    func setDeinterlace(_ value: Bool) { deinterlace = value; UserDefaults.standard.set(value, forKey: "nanostream.deinterlace") }
+
+    // Dev round 8 (R8-07): hide/show one group. Hiding the currently
+    // selected group resets the selection to All, otherwise the home
+    // grid would sit on a group that can no longer appear. Hiding
+    // never deletes channels: allChannels is untouched.
+    func setGroupHidden(_ group: String, _ hidden: Bool) {
+        if hidden { hiddenGroups.insert(group) } else { hiddenGroups.remove(group) }
+        if hidden, selectedGroup == group { selectedGroup = GroupID.all }
+        persistGroups()
+    }
+
+    // Dev round 8 (R8-07): replace the arranged order wholesale
+    // (the management UI owns the full list, including hidden
+    // groups, so a move is just a new order). Stale names are
+    // filtered at read time, never stored-checked here.
+    func setGroupOrder(_ order: [String]) {
+        groupOrder = order
+        persistGroups()
+    }
+
+    private func persistGroups() {
+        if let data = try? JSONEncoder().encode(Array(hiddenGroups)) {
+            UserDefaults.standard.set(data, forKey: "nanostream.hiddenGroups")
+        }
+        if let data = try? JSONEncoder().encode(groupOrder) {
+            UserDefaults.standard.set(data, forKey: "nanostream.groupOrder")
+        }
+    }
+
+    // Dev round 8 (R8-08): the tag map is the source of truth. A
+    // channel re-parsed from its source comes back untagged; this
+    // re-attaches the user's tags by id so refreshes never wipe
+    // them. Unknown ids simply get [].
+    func attachingStoredTags(_ channels: [Channel]) -> [Channel] {
+        Self.attachingStoredTags(channels, tags: channelTags)
+    }
+
+    static func attachingStoredTags(_ channels: [Channel], tags: [String: [String]]) -> [Channel] {
+        guard !tags.isEmpty else { return channels }
+        return channels.map { channel in
+            guard let stored = tags[channel.id] else { return channel }
+            var copy = channel
+            copy.tags = stored
+            return copy
+        }
+    }
+
+    func tags(for channel: Channel) -> [String] {
+        channelTags[channel.id] ?? channel.tags
+    }
+
+    /// All tags in use, for the home filter chips. Only tags the user
+    /// actually assigned (the map) count; source data never invents
+    /// one, so the map alone is the list.
+    var allTags: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for tags in channelTags.values {
+            for tag in tags where seen.insert(tag).inserted { result.append(tag) }
+        }
+        return result.sorted()
+    }
+
+    func setTags(_ tags: [String], for channel: Channel) {
+        let cleaned = Channel.normalizedTags(tags)
+        if cleaned.isEmpty {
+            channelTags.removeValue(forKey: channel.id)
+        } else {
+            channelTags[channel.id] = cleaned
+        }
+        if let data = try? JSONEncoder().encode(channelTags) {
+            UserDefaults.standard.set(data, forKey: "nanostream.channelTags")
+        }
+        // Re-attach in place so every live list picks the change up
+        // without waiting for the next refresh.
+        channels = attachingStoredTags(channels)
+        for id in channelSetsByPlaylist.keys {
+            channelSetsByPlaylist[id] = attachingStoredTags(channelSetsByPlaylist[id] ?? [])
+        }
+    }
+
+    // Dev round 8 (R8-04): config-center reorder. Moves within the
+    // single playlists array, so the config center and the playlist
+    // page can never disagree about order. Manual remove/insert
+    // (not IndexSet move) so up/down by one is unambiguous.
+    func movePlaylist(from index: Int, to destination: Int) {
+        guard playlists.indices.contains(index), playlists.indices.contains(destination), index != destination else { return }
+        let item = playlists.remove(at: index)
+        playlists.insert(item, at: destination)
+        save()
+    }
     func localized(_ key: String) -> String {
         guard language != "中文" else { return key }
         let table: [String: (String, String)] = [
@@ -460,7 +940,7 @@ final class AppState: ObservableObject {
             "无收藏频道": ("No favorite channels", "Chưa có kênh yêu thích"), "用星号标记频道以便在此快速访问。": ("Star a channel to access it here.", "Đánh dấu sao để truy cập nhanh tại đây."),
             "暂无播放列表": ("No playlists", "Chưa có danh sách phát"), "添加播放列表": ("Add playlist", "Thêm danh sách phát"), "关闭": ("Close", "Đóng"),
             "订阅": ("Subscriptions", "Đăng ký"), "频道": ("Channels", "Kênh"), "节目": ("Programs", "Chương trình"), "选择订阅": ("Choose subscription", "Chọn đăng ký"), "暂无节目数据": ("No program data", "Chưa có dữ liệu chương trình"), "当前节目": ("Now", "Đang phát"), "下一节目": ("Next", "Tiếp theo"),
-            "编码信息": ("Stream information", "Thông tin luồng"), "暂无数据": ("Unavailable", "Không có dữ liệu"), "播放失败，请检查频道地址。": ("Playback failed. Check the channel URL.", "Phát không thành công. Hãy kiểm tra URL kênh."),
+            "编码信息": ("Stream information", "Thông tin luồng"), "暂无数据": ("Unavailable", "Không có dữ liệu"),
             "语言": ("Language", "Ngôn ngữ"), "外观": ("Appearance", "Giao diện"), "播放设置": ("Playback", "Phát lại"), "网络": ("Network", "Mạng"), "缓冲区": ("Buffer", "Bộ đệm"), "数据与缓存": ("Data & cache", "Dữ liệu & bộ nhớ đệm"), "预览": ("Live preview", "Xem trước trực tiếp"), "显示延迟": ("Show latency", "Hiển thị độ trễ"),
             "主题模式": ("Theme", "Chủ đề"), "色彩主题": ("Accent color", "Màu nhấn"), "画中画": ("Picture in Picture", "Hình trong hình"), "硬件加速": ("Hardware acceleration", "Tăng tốc phần cứng"), "自动选择音轨": ("Auto-select audio", "Tự chọn âm thanh"), "首选播放器": ("Preferred player", "Trình phát ưu tiên"), "字幕大小": ("Subtitle size", "Cỡ phụ đề"), "EPG节目单": ("EPG guide", "EPG"), "EPG地址": ("EPG URL", "URL EPG"), "保存节目单": ("Save guide", "Lưu EPG"), "更新节目单地址": ("Update guide URL", "Cập nhật URL EPG"), "删除节目单": ("Delete guide", "Xóa EPG"), "刷新节目单": ("Refresh guide", "Làm mới EPG"), "自动刷新": ("Auto refresh", "Tự động làm mới"), "关闭自动刷新": ("Off", "Tắt"), "15分钟": ("15 minutes", "15 phút"), "30分钟": ("30 minutes", "30 phút"), "60分钟": ("60 minutes", "60 phút"), "6小时": ("6 hours", "6 giờ"), "节目单已更新。": ("Guide updated.", "EPG đã cập nhật."),
             "网络缓存大小": ("Network buffer", "Bộ đệm mạng"), "清除图片缓存": ("Clear image cache", "Xóa bộ nhớ ảnh"), "清除播放历史": ("Clear playback history", "Xóa lịch sử phát"), "选择本地 M3U 文件": ("Choose local M3U file", "Chọn tệp M3U cục bộ"), "输入列表名称": ("Playlist name", "Tên danh sách phát"), "详细信息": ("Details", "Chi tiết"), "播放列表来源": ("Playlist source", "Nguồn danh sách phát"), "添加列表": ("Add playlist", "Thêm danh sách phát"),
@@ -479,10 +959,20 @@ final class AppState: ObservableObject {
             "系统": ("System", "Hệ thống"), "浅色": ("Light", "Sáng"), "深色": ("Dark", "Tối"),
             "赛博朋克": ("Cyberpunk", "Cyberpunk"), "落日金": ("Sunset Gold", "Vàng hoàng hôn"), "剧毒绿": ("Toxic Green", "Xanh độc"), "霓虹粉": ("Neon Pink", "Hồng neon"), "深海蓝": ("Deep Sea Blue", "Xanh biển sâu"),
             "本地文件": ("Local file", "Tệp cục bộ"), "M3U 链接": ("M3U link", "Liên kết M3U"), "服务器地址 (http://...)": ("Server URL (http://...)", "URL máy chủ (http://...)"), "用户名": ("Username", "Tên người dùng"), "密码": ("Password", "Mật khẩu"), "编辑播放列表": ("Edit playlist", "Sửa danh sách phát"), "保存并刷新": ("Save & refresh", "Lưu và làm mới"), "播放列表已更新。": ("Playlist updated.", "Đã cập nhật danh sách phát"), "节目单地址无效。": ("The EPG URL is invalid.", "URL EPG không hợp lệ."), "节目单服务器返回 HTTP": ("The EPG server returned HTTP", "Máy chủ EPG trả về HTTP"), "返回内容不是有效的 XMLTV 节目单。": ("The response is not a valid XMLTV guide.", "Nội dung không phải EPG XMLTV hợp lệ."), "节目单中没有找到有效节目。": ("No valid programmes were found in the guide.", "Không tìm thấy chương trình hợp lệ trong EPG."),
-            "预览连接数已达上限": ("Preview connection limit reached", "Đã đạt giới hạn kết nối xem trước"), "延迟不可用": ("Latency unavailable", "Không có độ trễ"), "该频道没有可播放地址。": ("This channel has no playable URL.", "Kênh này không có URL phát được."), "无播放地址": ("No playable URL", "Không có URL phát"), "保存": ("Save", "Lưu"), "保存失败，数据未写入。": ("Save failed; data was not written.", "Lưu thất bại; dữ liệu chưa được ghi."), "网络超时，请检查网络后重试。": ("Network timed out. Check your connection and try again.", "Hết thời gian chờ mạng. Kiểm tra kết nối và thử lại."), "无网络连接。": ("No network connection.", "Không có kết nối mạng."), "无法找到服务器。": ("Server not found.", "Không tìm thấy máy chủ."), "无法连接到服务器。": ("Could not connect to the server.", "Không thể kết nối tới máy chủ."), "清除收藏": ("Clear favorites", "Xóa mục yêu thích"), "Xtream 账号或密码为空。": ("Xtream username or password is empty.", "Tên người dùng hoặc mật khẩu Xtream trống."), "节目单过大，超过 32MB 上限。": ("The guide is too large (over the 32 MB limit).", "EPG quá lớn (vượt giới hạn 32 MB)."), "已跳过无效频道行。": ("Skipped invalid channel lines.", "Đã bỏ qua các dòng kênh không hợp lệ."), "重试": ("Retry", "Thử lại"), "用 AVPlayer 重试": ("Retry with AVPlayer", "Thử lại bằng AVPlayer"), "正在加载新订阅…": ("Loading subscription…", "Đang tải đăng ký…"), "清除筛选": ("Clear filters", "Xóa bộ lọc"), "当前分组或搜索没有匹配的频道。": ("No channels match the current group or search.", "Không có kênh nào khớp với nhóm hoặc tìm kiếm hiện tại."), "旧播放列表数据损坏，已备份，无法自动恢复。": ("The saved library was corrupt and has been backed up; it could not be restored automatically.", "Thư viện đã lưu bị hỏng và đã được sao lưu; không thể khôi phục tự động."), "留空表示保持原密码": ("Leave blank to keep the existing password", "Để trống để giữ mật khẩu hiện tại"), "更改播放列表类型后，原地址将按新类型解析。": ("Changing the playlist type will re-interpret the existing address as the new type.", "Thay đổi loại danh sách sẽ diễn giải lại địa chỉ hiện tại theo loại mới."), "选择文件失败。": ("Failed to open the file picker.", "Không mở được trình chọn tệp."), "文件读取失败。": ("Failed to read the file.", "Không đọc được tệp."), "文件编码不受支持，请使用 UTF-8 文本。": ("The file encoding is not supported. Use UTF-8 text.", "Mã hóa tệp không được hỗ trợ. Hãy dùng văn bản UTF-8."), "前台自动刷新": ("Foreground auto-refresh", "Tự động làm mới khi mở ứng dụng"), "仅在 App 前台运行时刷新节目单。": ("The guide only refreshes while the app is in the foreground.", "EPG chỉ làm mới khi ứng dụng đang mở."), "码率上限": ("Bitrate cap", "Giới hạn tốc độ bit"), "其他": ("Other", "Khác"),
+            "预览连接数已达上限": ("Preview connection limit reached", "Đã đạt giới hạn kết nối xem trước"), "延迟不可用": ("Latency unavailable", "Không có độ trễ"), "该频道没有可播放地址。": ("This channel has no playable URL.", "Kênh này không có URL phát được."), "无播放地址": ("No playable URL", "Không có URL phát"), "保存": ("Save", "Lưu"), "保存失败，数据未写入。": ("Save failed; data was not written.", "Lưu thất bại; dữ liệu chưa được ghi."), "网络超时，请检查网络后重试。": ("Network timed out. Check your connection and try again.", "Hết thời gian chờ mạng. Kiểm tra kết nối và thử lại."), "无网络连接。": ("No network connection.", "Không có kết nối mạng."), "无法找到服务器。": ("Server not found.", "Không tìm thấy máy chủ."), "无法连接到服务器。": ("Could not connect to the server.", "Không thể kết nối tới máy chủ."), "清除收藏": ("Clear favorites", "Xóa mục yêu thích"), "Xtream 账号或密码为空。": ("Xtream username or password is empty.", "Tên người dùng hoặc mật khẩu Xtream trống."), "节目单过大，超过 32MB 上限。": ("The guide is too large (over the 32 MB limit).", "EPG quá lớn (vượt giới hạn 32 MB)."), "已跳过无效频道行。": ("Skipped invalid channel lines.", "Đã bỏ qua các dòng kênh không hợp lệ."), "重试": ("Retry", "Thử lại"), "用 AVPlayer 重试": ("Retry with AVPlayer", "Thử lại bằng AVPlayer"), "正在加载新订阅…": ("Loading subscription…", "Đang tải đăng ký…"), "清除筛选": ("Clear filters", "Xóa bộ lọc"), "当前分组或搜索没有匹配的频道。": ("No channels match the current group or search.", "Không có kênh nào khớp với nhóm hoặc tìm kiếm hiện tại."), "旧播放列表数据损坏，已备份，无法自动恢复。": ("The saved library was corrupt and has been backed up; it could not be restored automatically.", "Thư viện đã lưu bị hỏng và đã được sao lưu; không thể khôi phục tự động."), "留空表示保持原密码": ("Leave blank to keep the existing password", "Để trống để giữ mật khẩu hiện tại"), "更改播放列表类型后，原地址将按新类型解析。": ("Changing the playlist type will re-interpret the existing address as the new type.", "Thay đổi loại danh sách sẽ diễn giải lại địa chỉ hiện tại theo loại mới."), "选择文件失败。": ("Failed to open the file picker.", "Không mở được trình chọn tệp."), "文件读取失败。": ("Failed to read the file.", "Không đọc được tệp."), "文件编码不受支持，请使用 UTF-8 文本。": ("The file encoding is not supported. Use UTF-8 text.", "Mã hóa tệp không được hỗ trợ. Hãy dùng văn bản UTF-8."), "前台自动刷新": ("Foreground auto-refresh", "Tự động làm mới khi mở ứng dụng"), "仅在 App 前台运行时刷新节目单。": ("The guide only refreshes while the app is in the foreground.", "EPG chỉ làm mới khi ứng dụng đang mở."), "码率上限": ("Bitrate cap", "Giới hạn tốc độ bit"),
+            // Dev round 1: new playback/detail strings (base key is Chinese).
+            "延迟采样中": ("Sampling latency…", "Đang đo độ trễ"), "播放超时，请检查网络后重试。": ("Playback timed out. Check your connection and try again.", "Phát quá thời gian. Kiểm tra kết nối rồi thử lại."), "播放失败": ("Playback failed", "Phát thất bại"),
+            "上一频道": ("Previous channel", "Kênh trước"), "下一频道": ("Next channel", "Kênh tiếp theo"), "换源": ("Switch source", "Đổi nguồn"), "线路": ("Source", "Nguồn"),
+            "节目尚未播出": ("This program has not aired yet", "Chương trình chưa phát sóng"), "该节目无回看地址": ("No catchup URL for this program", "Chương trình này không có URL xem lại"), "该回看地址格式不受支持": ("This catchup URL format is not supported", "Định dạng URL xem lại này không được hỗ trợ"),
+            "倍速": ("Speed", "Tốc độ"), "直播不支持倍速": ("Speed is not available for live streams", "Không hỗ trợ tốc độ cho luồng trực tiếp"), "直播不支持快进/快退": ("Seeking is not available for live streams", "Không thể tua cho luồng trực tiếp"),
+            "音量": ("Volume", "Âm lượng"), "字幕": ("Subtitles", "Phụ đề"), "无字幕轨": ("No subtitle tracks", "Không có track phụ đề"), "关闭字幕": ("Subtitles off", "Tắt phụ đề"),
+            "播放引擎": ("Playback engine", "Công cụ phát"), "自动": ("Auto", "Tự động"), "系统播放器": ("System player", "Trình phát hệ thống"), "正在回看": ("Watching catchup", "Đang xem lại"), "回看": ("Catchup", "Xem lại"),
+            "其他": ("Other", "Khác"),
             // Round-3 localization batch (B01/A05/A13/B10/C23/A09): these
             // strings were previously hardcoded Chinese in the UI.
-            "此设置暂未接入播放器字幕渲染，仅保存偏好。": ("This setting is not wired into player subtitle rendering yet; it only saves a preference.", "Cài đặt này chưa nối với kết xuất phụ đề của trình phát; chỉ lưu tùy chọn."),
+            // Dev round 6 (R6-01): the subtitle-preference dead key was
+            // removed here (it had zero callers once R2-02 wired the
+            // size into both render paths).
             "留空时使用内置标识；仅用于 M3U/EPG 请求，KSPlayer 不读取此设置。": ("Leave blank to use the built-in identifier. Only used for M3U/EPG requests; KSPlayer does not read this setting.", "Để trống để dùng định danh tích hợp. Chỉ dùng cho yêu cầu M3U/EPG; KSPlayer không đọc cài đặt này."),
             "仅用于 M3U/EPG 请求（格式 host:port、http://host:port 或 user:pass@host:port，带认证的代理会把用户名密码发给代理服务器），KSPlayer 不读取此设置。": ("Only used for M3U/EPG requests (format host:port, http://host:port, or user:pass@host:port; an authenticated proxy receives the username and password); KSPlayer does not read this setting.", "Chỉ dùng cho yêu cầu M3U/EPG (định dạng host:port, http://host:port hoặc user:pass@host:port; proxy có xác thực sẽ nhận tên người dùng và mật khẩu); KSPlayer không đọc cài đặt này."),
             // Round-4 localization batch (A03 caption, A05 refresh notice,
@@ -498,6 +988,19 @@ final class AppState: ObservableObject {
             "确定删除已保存的节目单来源、草稿、缓存指南、更新时间与自动刷新间隔吗？该操作无法撤销。": ("Delete the saved guide source, draft, cached guide, last-updated time and auto-refresh interval? This cannot be undone.", "Xóa nguồn EPG đã lưu, bản nháp, EPG đã lưu đệm, thời gian cập nhật và khoảng tự động làm mới? Hành động này không thể hoàn tác."),
             "确定删除播放列表吗？该操作无法撤销。": ("Delete this playlist? This cannot be undone.", "Xóa danh sách phát này? Hành động này không thể hoàn tác."),
             "播放列表过大，超过 32MB 上限。": ("The playlist is too large (over the 32 MB limit).", "Danh sách phát quá lớn (vượt giới hạn 32 MB)."),
+            // Dev round 2 localization batch (R2-02/R2-07/R2-09/
+            // R2-10/R2-11/R2-12/R2-13/R2-16 new strings).
+            "列表": ("List", "Danh sách"),
+            "启用": ("Enabled", "Bật"),
+            "秒": ("s", "giây"),
+            "播放列表超时": ("Playlist timeout", "Hết thời gian danh sách phát"),
+            "节目单超时": ("Guide timeout", "Hết thời gian EPG"),
+            "系统播放器只用 AVPlayer；失败时显示重试，不自动切换 KSPlayer。": ("System player uses AVPlayer only; on failure it shows a retry instead of switching to KSPlayer.", "Trình phát hệ thống chỉ dùng AVPlayer; khi lỗi sẽ hiện thử lại thay vì chuyển sang KSPlayer."),
+            "KSPlayer 与系统播放器均按此值渲染字幕（系统播放器以 18pt 为 100% 换算，KSPlayer 再按屏幕宽度缩放）。": ("Both KSPlayer and the system player render subtitles at this size (system player converts with 18pt as 100%; KSPlayer additionally scales by screen width).", "Cả KSPlayer và trình phát hệ thống đều hiển thị phụ đề theo cỡ này (trình phát hệ thống quy đổi với 18pt là 100%; KSPlayer còn co giãn theo chiều rộng màn hình)."),
+            "留空时使用内置标识；用于 M3U/EPG 请求与两路播放（KSPlayer 与系统播放器）。": ("Leave blank to use the built-in identifier. Used for M3U/EPG requests and both playback paths (KSPlayer and system player).", "Để trống để dùng định danh tích hợp. Dùng cho yêu cầu M3U/EPG và cả hai đường phát (KSPlayer và trình phát hệ thống)."),
+            "用于 M3U/EPG 请求与系统播放器播放（格式 host:port、http://host:port 或 user:pass@host:port；带认证的代理会把用户名密码发给代理服务器，密码会迁移到钥匙串中；迁移失败时仍以明文保存在本地并显示警告）；KSPlayer 播放不读取此设置。": ("Used for M3U/EPG requests and system-player playback (format host:port, http://host:port, or user:pass@host:port; an authenticated proxy receives the username and password, and the password migrates to the Keychain; if migration fails it stays in plain text locally and a warning is shown). KSPlayer playback does not read this setting.", "Dùng cho yêu cầu M3U/EPG và phát bằng trình phát hệ thống (định dạng host:port, http://host:port hoặc user:pass@host:port; proxy có xác thực sẽ nhận tên người dùng và mật khẩu, và mật khẩu được chuyển vào Keychain; nếu chuyển thất bại, mật khẩu vẫn lưu dưới dạng văn bản thuần và sẽ hiện cảnh báo). Phát bằng KSPlayer không đọc cài đặt này."),
+            "当前节目单来自播放列表自带的 x-tvg-url：": ("The current guide comes from the playlist's own x-tvg-url: ", "EPG hiện tại lấy từ x-tvg-url của danh sách phát: "),
+            "未设置节目单来源，请到“设置 → EPG节目单”填写地址，或使用带 x-tvg-url 的播放列表。": ("No guide source is set. Enter an address under Settings → EPG guide, or use a playlist whose header carries x-tvg-url.", "Chưa đặt nguồn EPG. Hãy nhập địa chỉ trong Cài đặt → EPG, hoặc dùng danh sách phát có x-tvg-url trong tiêu đề."),
             "预览连接数已达上限，点按重试": ("Preview connection limit reached. Tap to retry.", "Đã đạt giới hạn kết nối xem trước. Chạm để thử lại."),
             "画中画已停止": ("Picture in Picture stopped", "Hình trong hình đã dừng"),
             // Round-5 localization batch (A01 caption, A05 warning).
@@ -511,7 +1014,124 @@ final class AppState: ObservableObject {
             // Round-8 localization batch (C02 clear-all sweep).
             "清除全部已存代理密码": ("Clear all stored proxy passwords", "Xóa tất cả mật khẩu proxy đã lưu"),
             // Round-9 localization batch (A01 clear-all scope note).
-            "清除全部仅删除已存入钥匙串的密码，若字段中仍带有密码，离场确认时仍会重新存入。": ("Clear-all only removes passwords already stored in the Keychain; if a password is still in the field, it will be saved again once you leave the field.", "Xóa tất cả chỉ xóa mật khẩu đã lưu trong Keychain; nếu mật khẩu vẫn còn trong ô nhập, mật khẩu sẽ được lưu lại khi rời khỏi ô nhập.")
+            "清除全部仅删除已存入钥匙串的密码，若字段中仍带有密码，离场确认时仍会重新存入。": ("Clear-all only removes passwords already stored in the Keychain; if a password is still in the field, it will be saved again once you leave the field.", "Xóa tất cả chỉ xóa mật khẩu đã lưu trong Keychain; nếu mật khẩu vẫn còn trong ô nhập, mật khẩu sẽ được lưu lại khi rời khỏi ô nhập."),
+            // Dev round 4 localization batch (R4-07/R4-08/R4-09/R4-12/R4-13).
+            "上次刷新": ("Last refreshed", "Làm mới lần cuối"),
+            "未刷新": ("Never refreshed", "Chưa từng làm mới"),
+            "刷新中": ("Refreshing", "Đang làm mới"),
+            "全部刷新": ("Refresh all", "Làm mới tất cả"),
+            "历史": ("History", "Lịch sử"),
+            "查看全部": ("View all", "Xem tất cả"),
+            "点按重试": ("Tap to retry", "Chạm để thử lại"),
+            "正在刷新…": ("Refreshing…", "Đang làm mới…"),
+            "进度": ("Progress", "Tiến độ"),
+            // Dev round 6 localization batch (R6-02/R6-03/R6-04/R6-05/
+            // R6-07/R6-08/R6-10 new strings).
+            "节目总览": ("Guide overview", "Tổng quan EPG"),
+            "节目详情": ("Program details", "Chi tiết chương trình"),
+            "播放": ("Play", "Phát"),
+            "播放回看": ("Play catchup", "Phát lại"),
+            "简介": ("Description", "Mô tả"),
+            "搜索历史": ("Search history", "Lịch sử tìm kiếm"),
+            "清除搜索历史": ("Clear search history", "Xóa lịch sử tìm kiếm"),
+            "按名称排序": ("Sort by name", "Sắp xếp theo tên"),
+            "按分组排序": ("Sort by group", "Sắp xếp theo nhóm"),
+            "编辑": ("Edit", "Sửa"),
+            "完成": ("Done", "Xong"),
+            "删除所选": ("Delete selected", "Xóa mục đã chọn"),
+            "确定删除所选收藏吗？该操作无法撤销。": ("Delete the selected favorites? This cannot be undone.", "Xóa các mục yêu thích đã chọn? Hành động này không thể hoàn tác."),
+            "预览并发上限": ("Preview concurrency limit", "Giới hạn xem trước đồng thời"),
+            "同时预览的路数，1–8 路。": ("Number of simultaneous live previews, 1–8.", "Số lượng xem trước trực tiếp đồng thời, 1–8."),
+            "缓存占用": ("Cache usage", "Dung lượng bộ nhớ đệm"),
+            "图片缓存与节目单缓存的实际占用，清除图片缓存后重新计算。": ("Actual usage of the image and guide caches; recalculated after clearing the image cache.", "Dung lượng thực tế của bộ nhớ đệm ảnh và EPG; được tính lại sau khi xóa bộ nhớ đệm ảnh."),
+            // Dev round 8 (R8-01): the one key the main table was
+            // missing (EN/VI showed the Chinese key), plus every new
+            // key this round introduces. All four languages must carry
+            // every key the UI renders; anything still missing falls
+            // back to the Chinese key (see the return lines below).
+            "删除播放列表": ("Delete playlist", "Xóa danh sách phát"),
+            "全局码率上限": ("Global bitrate cap", "Giới hạn bitrate toàn cục"),
+            "不限": ("Unlimited", "Không giới hạn"),
+            "仅系统播放器生效；KSPlayer 没有可用的码率上限接口。": ("Applies to the system player only; KSPlayer has no bitrate-cap API.", "Chỉ áp dụng cho trình phát hệ thống; KSPlayer không có API giới hạn bitrate."),
+            "播放未就绪超时": ("Playback not-ready timeout", "Thời gian chờ phát"),
+            "反交错": ("Deinterlacing", "Khử răng cưa"),
+            "反交错仅影响 KSPlayer；系统播放器使用系统默认解码。": ("Deinterlacing only affects KSPlayer; the system player uses the system default decoding.", "Khử răng cưa chỉ áp dụng cho KSPlayer; trình phát hệ thống dùng giải mã mặc định."),
+            "配置中心": ("Config center", "Trung tâm cấu hình"),
+            "分组管理": ("Group management", "Quản lý nhóm"),
+            "隐藏": ("Hide", "Ẩn"),
+            "显示": ("Show", "Hiện"),
+            "导入配置": ("Import config", "Nhập cấu hình"),
+            "导出配置": ("Export config", "Xuất cấu hình"),
+            "分享配置文件": ("Share config file", "Chia sẻ tệp cấu hình"),
+            "密码不会随配置导出，导入后需重新填写。": ("Passwords are never exported with a config; re-enter them after import.", "Mật khẩu không được xuất kèm cấu hình; hãy nhập lại sau khi nhập."),
+            "配置文件": ("Config file", "Tệp cấu hình"),
+            "文件格式无效。": ("Invalid file format.", "Định dạng tệp không hợp lệ."),
+            "未命名播放列表": ("Unnamed playlist", "Danh sách phát không tên"),
+            "播放列表名称或地址为空。": ("Playlist name or URL is empty.", "Tên hoặc URL danh sách phát trống."),
+            "本地文件播放列表无法通过配置导入。": ("Local-file playlists cannot be imported from a config file.", "Không thể nhập danh sách phát tệp cục bộ từ tệp cấu hình."),
+            "配置导入后请点“全部刷新”加载频道。": ("After importing, tap “Refresh all” to load channels.", "Sau khi nhập, nhấn “Làm mới tất cả” để tải kênh."),
+            "标签": ("Tags", "Thẻ"),
+            "添加标签": ("Add tag", "Thêm thẻ"),
+            "全部标签": ("All tags", "Tất cả thẻ"),
+            "RTSP 流已自动使用 KSPlayer 播放（系统播放器不支持 RTSP）。": ("RTSP streams play with KSPlayer automatically (the system player does not support RTSP).", "Luồng RTSP tự động phát bằng KSPlayer (trình phát hệ thống không hỗ trợ RTSP)."),
+            "已导入播放列表：": ("Imported playlists: ", "Đã nhập danh sách phát: "),
+            // Dev round 10 (D-01/D-02/D-04/D-05/D-06/D-07): lab,
+            // translation, iCloud, CarPlay, DLNA and live-subtitle
+            // strings. Lab captions are this app's own wording.
+            "实验室": ("Lab", "Phòng thí nghiệm"),
+            "这里是还没做完的实验功能，可能不稳定、可能播不出、可能更耗电。开之前想清楚，出了问题关掉就能回到原来的播放方式。": ("Experimental features live here. They may be unstable, may fail to play, and may use more power. Think before enabling; turning one off returns to the normal playback path.", "Các tính năng thử nghiệm nằm ở đây. Chúng có thể không ổn định, có thể không phát được và có thể tốn pin hơn. Hãy cân nhắc trước khi bật; tắt đi sẽ trở lại cách phát thông thường."),
+            "组播快速启动": ("Multicast fast start", "Khởi động nhanh multicast"),
+            "只对组播地址起作用：缩短探测和初始缓冲，让组播频道起播更快。完整的运营商级快速换台需要服务端配合，没有服务端时这个开关只做播放器一侧的加速。": ("Only affects multicast addresses: it shortens probing and the initial buffer so multicast channels start faster. Full operator-grade fast channel change needs server cooperation; without a cooperating server this switch only accelerates the player side.", "Chỉ ảnh hưởng địa chỉ multicast: rút ngắn thăm dò và bộ đệm ban đầu để kênh multicast khởi động nhanh hơn. Chuyển kênh nhanh cấp nhà mạng đầy đủ cần máy chủ hợp tác; không có máy chủ hợp tác, công tắc này chỉ tăng tốc phía trình phát."),
+            "多码率起播预选": ("Multi-bitrate start preselect", "Chọn trước bitrate khi khởi động"),
+            "多码率直播起播前先选定一档直接播，不用等播放器把全部码率都探一遍。只在自动和 KSPlayer 下生效；个别源预选后播不出来时，关掉就回到原来的播法。": ("For multi-bitrate live streams, one rendition is picked and played directly at start, without waiting for the player to probe every rendition. Only applies to Auto and KSPlayer; if a source fails after preselection, turning it off restores the original playback.", "Với luồng trực tiếp đa bitrate, một mức sẽ được chọn và phát trực tiếp khi khởi động, không cần đợi trình phát thăm dò mọi mức. Chỉ áp dụng cho Tự động và KSPlayer; nếu nguồn lỗi sau khi chọn trước, tắt đi sẽ khôi phục cách phát ban đầu."),
+            "回看地址替换": ("Catchup URL rewrite", "Viết lại URL xem lại"),
+            "回看播放前，把回看地址里的 PLTV 路径段换成 TVOD。只动回看地址，不动直播地址；回看源本来就不需要替换时，保持关闭。": ("Before catchup playback, the PLTV path segment in the catchup URL is replaced with TVOD. Only catchup URLs are rewritten, never live URLs; leave it off when the catchup source needs no rewrite.", "Trước khi phát lại, đoạn đường dẫn PLTV trong URL xem lại được thay bằng TVOD. Chỉ URL xem lại được viết lại, không bao giờ là URL trực tiếp; hãy tắt khi nguồn xem lại không cần viết lại."),
+            "增强系统播放器": ("Enhanced system player", "Trình phát hệ thống nâng cao"),
+            "系统播放器遇到播不出的频道时，会换一条兼容路径再试一次，试过还不行才显示失败。下次播放生效；和自动切换 KSPlayer 是两回事。": ("When the system player cannot play a channel, it retries once over a compatible path and only shows failure if that also fails. Takes effect on the next playback; it is not the same as Auto switching to KSPlayer.", "Khi trình phát hệ thống không phát được kênh, nó thử lại một lần qua đường dẫn tương thích và chỉ báo lỗi nếu lần đó cũng thất bại. Có hiệu lực từ lần phát tiếp theo; khác với việc Tự động chuyển sang KSPlayer."),
+            "Metal 渲染": ("Metal rendering", "Kết xuất Metal"),
+            "仅 KSPlayer 生效，系统播放器不受影响。下次播放生效。可能更耗电，HDR 显示效果可能有差别。": ("KSPlayer only; the system player is unaffected. Effective on the next playback. It may use more power, and HDR rendering may differ.", "Chỉ có hiệu lực với KSPlayer; trình phát hệ thống không bị ảnh hưởng. Có hiệu lực từ lần phát tiếp theo. Có thể tốn pin hơn và hiển thị HDR có thể khác."),
+            "实时字幕": ("Live subtitles", "Phụ đề trực tiếp"),
+            "实验功能：识别会比画面慢，也可能漏段；只有带音频轨的流才能识别，没有音频轨的源会明确提示不支持，绝不会用麦克风冒充流内音频。默认关闭。": ("Experimental: recognition lags the picture and may skip segments; only streams with an audio track can be recognised, and a source without one says so explicitly. The microphone is never used as a stand-in for in-stream audio. Off by default.", "Thử nghiệm: nhận dạng chậm hơn hình ảnh và có thể bỏ đoạn; chỉ luồng có track âm thanh mới nhận dạng được, nguồn không có sẽ báo rõ là không hỗ trợ. Không bao giờ dùng mic thay cho âm thanh trong luồng. Mặc định tắt."),
+            "识别来源": ("Recognition source", "Nguồn nhận dạng"),
+            "转录接口地址": ("Transcription endpoint", "Endpoint chuyển giọng nói thành văn bản"),
+            "转录密钥": ("Transcription key", "Khóa chuyển giọng nói thành văn bản"),
+            "AI 转录接口地址": ("AI transcription endpoint", "Endpoint chuyển giọng nói thành văn bản AI"),
+            "AI 转录模型": ("AI transcription model", "Mô hình chuyển giọng nói thành văn bản AI"),
+            "AI 转录密钥": ("AI transcription key", "Khóa chuyển giọng nói thành văn bản AI"),
+            "接口地址为空时对应档位不可用；识别失败时不显示任何文字，绝不编造字幕。": ("When an endpoint is empty, that source is unavailable; when recognition fails, no text is shown at all — subtitles are never invented.", "Khi endpoint trống, nguồn đó không khả dụng; khi nhận dạng thất bại, không hiển thị văn bản nào — phụ đề không bao giờ được bịa ra."),
+            "保存密钥": ("Save key", "Lưu khóa"),
+            "清除密钥": ("Clear key", "Xóa khóa"),
+            "已保存": ("Saved", "Đã lưu"),
+            "（未译出）": ("(untranslated)", "(chưa dịch)"),
+            "该源不支持实时字幕": ("This source does not support live subtitles", "Nguồn này không hỗ trợ phụ đề trực tiếp"),
+            "实时字幕识别当前不可用": ("Live subtitle recognition is currently unavailable", "Nhận dạng phụ đề trực tiếp hiện không khả dụng"),
+            "字幕翻译": ("Subtitle translation", "Dịch phụ đề"),
+            "翻译来源": ("Translation source", "Nguồn dịch"),
+            "翻译接口地址": ("Translation endpoint", "Endpoint dịch"),
+            "翻译密钥": ("Translation key", "Khóa dịch"),
+            "AI 翻译接口地址": ("AI translation endpoint", "Endpoint dịch AI"),
+            "AI 翻译模型": ("AI translation model", "Mô hình dịch AI"),
+            "AI 翻译密钥": ("AI translation key", "Khóa dịch AI"),
+            "目标语言跟随应用语言；翻译失败时显示原文并标注未译出；接口地址为空时对应档位不可用；密钥只存钥匙串。": ("The target language follows the app language; a failed translation shows the original marked untranslated; an empty endpoint disables that source; keys live in the Keychain only.", "Ngôn ngữ đích theo ngôn ngữ ứng dụng; dịch thất bại sẽ hiển thị văn bản gốc kèm dấu chưa dịch; endpoint trống sẽ vô hiệu nguồn đó; khóa chỉ nằm trong Keychain."),
+            "翻译模式": ("Translation mode", "Chế độ dịch"),
+            "字幕翻": ("Subtitle translation", "Dịch phụ đề"),
+            "听翻": ("Listen translation", "Dịch nghe"),
+            "听翻需音频分轨与识别授权；无音频分轨的源不支持听翻。": ("Listen translation needs an audio track and recognition authorization; sources without an audio track do not support listen translation.", "Dịch nghe cần track âm thanh và quyền nhận dạng; nguồn không có track âm thanh không hỗ trợ dịch nghe."),
+            "AI 翻译接口地址、密钥与模型同时服务于字幕翻与听翻两模式，不另设第二套存储。": ("The AI translation endpoint, key and model serve both subtitle and listen translation; there is no second set of stored settings.", "Endpoint, khóa và model dịch AI phục vụ cả dịch phụ đề và dịch nghe; không có bộ cài đặt thứ hai."),
+            "该源不支持听翻": ("This source does not support listen translation", "Nguồn này không hỗ trợ dịch nghe"),
+            "听翻识别当前不可用": ("Listen translation recognition is currently unavailable", "Nhận dạng dịch nghe hiện không khả dụng"),
+            "CarPlay": ("CarPlay", "CarPlay"),
+            "连接车机后，车机上会出现频道列表并可播放音频（全版本可用）；视频需 iOS 26.4 及以上、支持车载视频的车机，且仅驻车时可用。": ("After connecting to a car, the channel list appears on the car screen with audio playback (available on all versions); video needs iOS 26.4 or later, a vehicle that supports video in the car, and is only available while parked.", "Sau khi kết nối với xe, danh sách kênh sẽ hiện trên màn hình xe kèm phát âm thanh (khả dụng trên mọi phiên bản); video cần iOS 26.4 trở lên, xe hỗ trợ video trên xe, và chỉ khả dụng khi xe đang đỗ."),
+            "iCloud 同步": ("iCloud sync", "Đồng bộ iCloud"),
+            "同步播放列表与设置，不同步密码；没有 iCloud 环境时静默使用本地数据。": ("Syncs playlists and settings, never passwords; without an iCloud environment the app silently stays local.", "Đồng bộ danh sách phát và cài đặt, không bao giờ đồng bộ mật khẩu; không có môi trường iCloud, ứng dụng lặng lẽ dùng dữ liệu cục bộ."),
+            "投屏": ("Cast", "Chiếu"),
+            "正在投屏": ("Casting", "Đang chiếu"),
+            "断开投屏": ("Disconnect cast", "Ngắt kết nối chiếu"),
+            "正在搜索设备…": ("Searching for devices…", "Đang tìm thiết bị…"),
+            "未发现设备": ("No devices found", "Không tìm thấy thiết bị"),
+            "重新搜索": ("Search again", "Tìm lại"),
+            "投屏失败：设备拒绝了播放请求。": ("Cast failed: the device refused the play request.", "Chiếu thất bại: thiết bị đã từ chối yêu cầu phát."),
+            "已尝试兼容路径仍失败": ("Compatible path already tried, still failed", "Đã thử đường dẫn tương thích nhưng vẫn thất bại"),
         ]
         if language == "English" { return table[key]?.0 ?? key }
         if language == "Tiếng Việt" { return table[key]?.1 ?? key }
@@ -522,7 +1142,7 @@ final class AppState: ObservableObject {
             "无收藏频道": "沒有收藏的頻道", "用星号标记频道以便在此快速访问。": "以星號標記頻道，即可在這裡快速開啟。",
             "暂无播放列表": "暫無播放清單", "添加播放列表": "加入播放清單", "关闭": "關閉",
             "订阅": "訂閱", "频道": "頻道", "节目": "節目", "选择订阅": "選擇訂閱", "暂无节目数据": "暫無節目資料", "当前节目": "目前", "下一节目": "下一個",
-            "编码信息": "編碼資訊", "暂无数据": "暫無資料", "播放失败，请检查频道地址。": "播放失敗，請檢查頻道網址。",
+            "编码信息": "編碼資訊", "暂无数据": "暫無資料",
             "语言": "語言", "外观": "外觀", "播放设置": "播放設定", "网络": "網路", "缓冲区": "緩衝區", "数据与缓存": "資料與快取", "预览": "預覽", "显示延迟": "顯示延遲", "EPG节目单": "EPG 節目表", "EPG地址": "EPG 網址", "保存节目单": "儲存節目表", "更新节目单地址": "更新節目表網址", "删除节目单": "刪除節目表", "刷新节目单": "重新整理節目表", "自动刷新": "自動重新整理", "关闭自动刷新": "關閉自動重新整理", "15分钟": "15 分鐘", "30分钟": "30 分鐘", "60分钟": "60 分鐘", "6小时": "6 小時", "节目单已更新。": "節目表已更新。",
             "主题模式": "主題模式", "色彩主题": "色彩主題", "画中画": "子母畫面", "首选播放器": "偏好播放器", "字幕大小": "字幕大小",
             "网络缓存大小": "網路緩衝大小", "清除图片缓存": "清除圖片快取", "清除播放历史": "清除播放記錄",
@@ -535,8 +1155,16 @@ final class AppState: ObservableObject {
             "文件中没有找到有效频道。": "檔案中找不到有效頻道。", "播放列表添加失败。": "無法加入播放清單。", "图片缓存已清除。": "圖片快取已清除。",
             "播放列表地址无效。": "播放清單網址無效。", "播放列表为空或没有有效频道。": "播放清單為空或沒有有效頻道。", "返回内容不是有效的 M3U 播放列表。": "回傳內容不是有效的 M3U 播放清單。",
             "系统": "系統", "浅色": "淺色", "深色": "深色", "赛博朋克": "電馭叛客", "落日金": "落日金", "剧毒绿": "劇毒綠", "霓虹粉": "霓虹粉", "深海蓝": "深海藍",
-            "硬件加速": "硬體加速", "自动选择音轨": "自動選擇音軌", "其他": "其他", "预览连接数已达上限": "已達預覽連線上限", "延迟不可用": "無法取得延遲", "该频道没有可播放地址。": "此頻道沒有可播放的網址。", "无播放地址": "沒有可播放的網址", "保存": "儲存", "保存失败，数据未写入。": "儲存失敗，資料未寫入。", "网络超时，请检查网络后重试。": "網路逾時，請檢查網路後再試一次。", "无网络连接。": "沒有網路連線。", "无法找到服务器。": "找不到伺服器。", "无法连接到服务器。": "無法連線至伺服器。", "清除收藏": "清除收藏", "Xtream 账号或密码为空。": "Xtream 帳號或密碼為空。", "节目单过大，超过 32MB 上限。": "節目表過大（超過 32 MB 上限）。", "已跳过无效频道行。": "已略過無效的頻道行。", "重试": "重試", "用 AVPlayer 重试": "用 AVPlayer 重試", "正在加载新订阅…": "正在載入訂閱…", "清除筛选": "清除篩選", "当前分组或搜索没有匹配的频道。": "目前的分組或搜尋沒有符合的頻道。", "旧播放列表数据损坏，已备份，无法自动恢复。": "已儲存的資料庫已損毀並已備份，無法自動還原。", "留空表示保持原密码": "留空表示保留原密碼", "更改播放列表类型后，原地址将按新类型解析。": "變更播放清單類型後，原網址將依新類型解析。", "选择文件失败。": "無法開啟檔案選擇器。", "文件读取失败。": "無法讀取檔案。", "文件编码不受支持，请使用 UTF-8 文本。": "不支援此檔案編碼，請使用 UTF-8 文字。", "前台自动刷新": "前景自動重新整理", "仅在 App 前台运行时刷新节目单。": "節目表僅在 App 於前景執行時重新整理。", "码率上限": "位元率上限", "本地文件": "本機檔案", "M3U 链接": "M3U 連結", "服务器地址 (http://...)": "伺服器網址 (http://...)", "用户名": "使用者名稱", "密码": "密碼", "编辑播放列表": "編輯播放清單", "保存并刷新": "儲存並重新整理", "播放列表已更新。": "播放清單已更新。", "节目单地址无效。": "節目表網址無效。", "返回内容不是有效的 XMLTV 节目单。": "回傳內容不是有效的 XMLTV 節目表。", "节目单中没有找到有效节目。": "節目表中找不到有效節目。",
-            "此设置暂未接入播放器字幕渲染，仅保存偏好。": "此設定尚未接入播放器字幕渲染，僅儲存偏好。",
+            "硬件加速": "硬體加速", "自动选择音轨": "自動選擇音軌", "其他": "其他", "预览连接数已达上限": "已達預覽連線上限", "延迟不可用": "無法取得延遲", "该频道没有可播放地址。": "此頻道沒有可播放的網址。", "无播放地址": "沒有可播放的網址", "保存": "儲存", "保存失败，数据未写入。": "儲存失敗，資料未寫入。", "网络超时，请检查网络后重试。": "網路逾時，請檢查網路後再試一次。", "无网络连接。": "沒有網路連線。", "无法找到服务器。": "找不到伺服器。", "无法连接到服务器。": "無法連線至伺服器。", "清除收藏": "清除收藏", "Xtream 账号或密码为空。": "Xtream 帳號或密碼為空。", "节目单过大，超过 32MB 上限。": "節目表過大（超過 32 MB 上限）。", "已跳过无效频道行。": "已略過無效的頻道行。", "重试": "重試", "用 AVPlayer 重试": "用 AVPlayer 重試", "正在加载新订阅…": "正在載入訂閱…", "清除筛选": "清除篩選", "当前分组或搜索没有匹配的频道。": "目前的分組或搜尋沒有符合的頻道。", "旧播放列表数据损坏，已备份，无法自动恢复。": "已儲存的資料庫已損毀並已備份，無法自動還原。", "留空表示保持原密码": "留空表示保留原密碼", "更改播放列表类型后，原地址将按新类型解析。": "變更播放清單類型後，原網址將依新類型解析。", "选择文件失败。": "無法開啟檔案選擇器。", "文件读取失败。": "無法讀取檔案。", "文件编码不受支持，请使用 UTF-8 文本。": "不支援此檔案編碼，請使用 UTF-8 文字。", "前台自动刷新": "前景自動重新整理", "仅在 App 前台运行时刷新节目单。": "節目表僅在 App 於前景執行時重新整理。", "码率上限": "位元率上限",
+            // Dev round 1: new playback/detail strings (Traditional Chinese).
+            "延迟采样中": "延遲採樣中", "播放超时，请检查网络后重试。": "播放逾時，請檢查網路後重試。", "播放失败": "播放失敗",
+            "上一频道": "上一頻道", "下一频道": "下一頻道", "换源": "換源", "线路": "線路",
+            "节目尚未播出": "節目尚未播出", "该节目无回看地址": "該節目無回看網址", "该回看地址格式不受支持": "該回看網址格式不受支援",
+            "倍速": "倍速", "直播不支持倍速": "直播不支援倍速", "直播不支持快进/快退": "直播不支援快進／快退",
+            "音量": "音量", "字幕": "字幕", "无字幕轨": "無字幕軌", "关闭字幕": "關閉字幕",
+            "播放引擎": "播放引擎", "自动": "自動", "系统播放器": "系統播放器", "正在回看": "正在回看", "回看": "回看",
+            "系统播放器只用 AVPlayer；失败时显示重试，不自动切换 KSPlayer。": "系統播放器只用 AVPlayer；失敗時顯示重試，不自動切換 KSPlayer。",
+            "本地文件": "本機檔案", "M3U 链接": "M3U 連結", "服务器地址 (http://...)": "伺服器網址 (http://...)", "用户名": "使用者名稱", "密码": "密碼", "编辑播放列表": "編輯播放清單", "保存并刷新": "儲存並重新整理", "播放列表已更新。": "播放清單已更新。", "节目单地址无效。": "節目表網址無效。", "返回内容不是有效的 XMLTV 节目单。": "回傳內容不是有效的 XMLTV 節目表。", "节目单中没有找到有效节目。": "節目表中找不到有效節目。",
             "留空时使用内置标识；仅用于 M3U/EPG 请求，KSPlayer 不读取此设置。": "留空時使用內建識別；僅用於 M3U/EPG 請求，KSPlayer 不讀取此設定。",
             "仅用于 M3U/EPG 请求（格式 host:port、http://host:port 或 user:pass@host:port，带认证的代理会把用户名密码发给代理服务器），KSPlayer 不读取此设置。": "僅用於 M3U/EPG 請求（格式 host:port、http://host:port 或 user:pass@host:port，帶認證的代理會把使用者名稱密碼發給代理伺服器），KSPlayer 不讀取此設定。",
             "分组": "分組",
@@ -559,7 +1187,94 @@ final class AppState: ObservableObject {
             "代理已填写用户名但未提供密码，请求将以无认证方式发出。请补全密码或清除用户名。": "代理已填寫使用者名稱但未提供密碼，請求將以無認證方式發出。請補全密碼或清除使用者名稱。",
             "清除已存代理密码": "清除已存的代理密碼",
             "清除全部已存代理密码": "清除全部已存的代理密碼",
-            "清除全部仅删除已存入钥匙串的密码，若字段中仍带有密码，离场确认时仍会重新存入。": "清除全部僅刪除已存入鑰匙圈的密碼，若欄位中仍帶有密碼，離開欄位時仍會重新存入。"
+            "清除全部仅删除已存入钥匙串的密码，若字段中仍带有密码，离场确认时仍会重新存入。": "清除全部僅刪除已存入鑰匙圈的密碼，若欄位中仍帶有密碼，離開欄位時仍會重新存入。",
+            "上次刷新": "上次重新整理", "未刷新": "尚未重新整理", "刷新中": "正在重新整理", "全部刷新": "全部重新整理", "历史": "歷史", "查看全部": "查看全部", "点按重试": "點按重試", "正在刷新…": "正在重新整理…", "进度": "進度",
+            // Dev round 6 (Traditional Chinese).
+            "节目总览": "節目總覽", "节目详情": "節目詳情", "播放": "播放", "播放回看": "播放回看", "简介": "簡介",
+            "搜索历史": "搜尋記錄", "清除搜索历史": "清除搜尋記錄", "按名称排序": "按名稱排序", "按分组排序": "按分組排序",
+            "编辑": "編輯", "完成": "完成", "删除所选": "刪除所選",
+            "确定删除所选收藏吗？该操作无法撤销。": "確定刪除所選收藏嗎？此操作無法復原。",
+            "预览并发上限": "預覽並行上限", "同时预览的路数，1–8 路。": "同時預覽的路數，1–8 路。",
+            "缓存占用": "快取用量", "图片缓存与节目单缓存的实际占用，清除图片缓存后重新计算。": "圖片快取與節目表快取的實際用量，清除圖片快取後重新計算。",
+            // Dev round 8 (R8-01): the 10 keys the Traditional table
+            // was missing (they fell back to Simplified), plus every
+            // new key this round introduces.
+            "KSPlayer 与系统播放器均按此值渲染字幕（系统播放器以 18pt 为 100% 换算，KSPlayer 再按屏幕宽度缩放）。": "KSPlayer 與系統播放器均按此值渲染字幕（系統播放器以 18pt 為 100% 換算，KSPlayer 再按螢幕寬度縮放）。",
+            "删除播放列表": "刪除播放清單", "启用": "啟用",
+            "当前节目单来自播放列表自带的 x-tvg-url：": "目前節目單來自播放清單自帶的 x-tvg-url：",
+            "播放列表超时": "播放清單逾時",
+            "未设置节目单来源，请到“设置 → EPG节目单”填写地址，或使用带 x-tvg-url 的播放列表。": "未設定節目單來源，請到「設定 → EPG 節目表」填寫網址，或使用帶 x-tvg-url 的播放清單。",
+            "用于 M3U/EPG 请求与系统播放器播放（格式 host:port、http://host:port 或 user:pass@host:port；带认证的代理会把用户名密码发给代理服务器，密码会迁移到钥匙串中；迁移失败时仍以明文保存在本地并显示警告）；KSPlayer 播放不读取此设置。": "用於 M3U/EPG 請求與系統播放器播放（格式 host:port、http://host:port 或 user:pass@host:port；帶認證的代理會把使用者名稱密碼發給代理伺服器，密碼會遷移到鑰匙圈中；遷移失敗時仍以明文保存在本機並顯示警告）；KSPlayer 播放不讀取此設定。",
+            "留空时使用内置标识；用于 M3U/EPG 请求与两路播放（KSPlayer 与系统播放器）。": "留空時使用內建識別；用於 M3U/EPG 請求與兩路播放（KSPlayer 與系統播放器）。",
+            "秒": "秒", "节目单超时": "節目表逾時",
+            "全局码率上限": "全域位元率上限", "不限": "不限",
+            "仅系统播放器生效；KSPlayer 没有可用的码率上限接口。": "僅系統播放器生效；KSPlayer 沒有可用的位元率上限介面。",
+            "播放未就绪超时": "播放未就緒逾時", "反交错": "去交錯",
+            "反交错仅影响 KSPlayer；系统播放器使用系统默认解码。": "去交錯僅影響 KSPlayer；系統播放器使用系統預設解碼。",
+            "配置中心": "設定中心", "分组管理": "分組管理", "隐藏": "隱藏", "显示": "顯示",
+            "导入配置": "匯入設定", "导出配置": "匯出設定", "分享配置文件": "分享設定檔",
+            "密码不会随配置导出，导入后需重新填写。": "密碼不會隨設定匯出，匯入後需重新填寫。",
+            "配置文件": "設定檔", "文件格式无效。": "檔案格式無效。", "未命名播放列表": "未命名播放清單",
+            "播放列表名称或地址为空。": "播放清單名稱或網址為空。",
+            "本地文件播放列表无法通过配置导入。": "本機檔案播放清單無法透過設定檔匯入。",
+            "配置导入后请点“全部刷新”加载频道。": "匯入設定後請點「全部重新整理」載入頻道。",
+            "标签": "標籤", "添加标签": "加入標籤", "全部标签": "全部標籤",
+            "RTSP 流已自动使用 KSPlayer 播放（系统播放器不支持 RTSP）。": "RTSP 串流會自動使用 KSPlayer 播放（系統播放器不支援 RTSP）。",
+            "已导入播放列表：": "已匯入播放清單：",
+            "实验室": "實驗室",
+            "这里是还没做完的实验功能，可能不稳定、可能播不出、可能更耗电。开之前想清楚，出了问题关掉就能回到原来的播放方式。": "這裡是還沒做完的實驗功能，可能不穩定、可能播不出、可能更耗電。開之前想清楚，出了問題關掉就能回到原來的播放方式。",
+            "组播快速启动": "組播快速啟動",
+            "只对组播地址起作用：缩短探测和初始缓冲，让组播频道起播更快。完整的运营商级快速换台需要服务端配合，没有服务端时这个开关只做播放器一侧的加速。": "只對組播位址起作用：縮短探測和初始緩衝，讓組播頻道起播更快。完整的營運商級快速換台需要服務端配合，沒有服務端時這個開關只做播放器一側的加速。",
+            "多码率起播预选": "多碼率起播預選",
+            "多码率直播起播前先选定一档直接播，不用等播放器把全部码率都探一遍。只在自动和 KSPlayer 下生效；个别源预选后播不出来时，关掉就回到原来的播法。": "多碼率直播起播前先選定一檔直接播，不用等播放器把全部碼率都探一遍。只在自動和 KSPlayer 下生效；個別源預選後播不出來時，關掉就回到原來的播法。",
+            "回看地址替换": "回看網址替換",
+            "回看播放前，把回看地址里的 PLTV 路径段换成 TVOD。只动回看地址，不动直播地址；回看源本来就不需要替换时，保持关闭。": "回看播放前，把回看網址裡的 PLTV 路徑段換成 TVOD。只動回看網址，不動直播網址；回看源本來就不需要替換時，保持關閉。",
+            "增强系统播放器": "增強系統播放器",
+            "系统播放器遇到播不出的频道时，会换一条兼容路径再试一次，试过还不行才显示失败。下次播放生效；和自动切换 KSPlayer 是两回事。": "系統播放器遇到播不出的頻道時，會換一條相容路徑再試一次，試過還不行才顯示失敗。下次播放生效；和自動切換 KSPlayer 是兩回事。",
+            "Metal 渲染": "Metal 渲染",
+            "仅 KSPlayer 生效，系统播放器不受影响。下次播放生效。可能更耗电，HDR 显示效果可能有差别。": "僅 KSPlayer 生效，系統播放器不受影響。下次播放生效。可能更耗電，HDR 顯示效果可能有差別。",
+            "实时字幕": "即時字幕",
+            "实验功能：识别会比画面慢，也可能漏段；只有带音频轨的流才能识别，没有音频轨的源会明确提示不支持，绝不会用麦克风冒充流内音频。默认关闭。": "實驗功能：識別會比畫面慢，也可能漏段；只有帶音訊軌的流才能識別，沒有音訊軌的源會明確提示不支援，絕不會用麥克風冒充流內音訊。預設關閉。",
+            "识别来源": "識別來源",
+            "转录接口地址": "轉錄介面網址",
+            "转录密钥": "轉錄金鑰",
+            "AI 转录接口地址": "AI 轉錄介面網址",
+            "AI 转录模型": "AI 轉錄模型",
+            "AI 转录密钥": "AI 轉錄金鑰",
+            "接口地址为空时对应档位不可用；识别失败时不显示任何文字，绝不编造字幕。": "介面網址為空時對應檔位不可用；識別失敗時不顯示任何文字，絕不編造字幕。",
+            "保存密钥": "儲存金鑰",
+            "清除密钥": "清除金鑰",
+            "已保存": "已儲存",
+            "（未译出）": "（未譯出）",
+            "该源不支持实时字幕": "該源不支援即時字幕",
+            "实时字幕识别当前不可用": "即時字幕識別目前不可用",
+            "字幕翻译": "字幕翻譯",
+            "翻译来源": "翻譯來源",
+            "翻译接口地址": "翻譯介面網址",
+            "翻译密钥": "翻譯金鑰",
+            "AI 翻译接口地址": "AI 翻譯介面網址",
+            "AI 翻译模型": "AI 翻譯模型",
+            "AI 翻译密钥": "AI 翻譯金鑰",
+            "目标语言跟随应用语言；翻译失败时显示原文并标注未译出；接口地址为空时对应档位不可用；密钥只存钥匙串。": "目標語言跟隨應用語言；翻譯失敗時顯示原文並標註未譯出；介面網址為空時對應檔位不可用；金鑰只存鑰匙圈。",
+            "翻译模式": "翻譯模式",
+            "字幕翻": "字幕翻",
+            "听翻": "聽翻",
+            "听翻需音频分轨与识别授权；无音频分轨的源不支持听翻。": "聽翻需音訊分軌與識別授權；無音訊分軌的來源不支援聽翻。",
+            "AI 翻译接口地址、密钥与模型同时服务于字幕翻与听翻两模式，不另设第二套存储。": "AI 翻譯介面網址、金鑰與模型同時服務於字幕翻與聽翻兩種模式，不另設第二套儲存。",
+            "该源不支持听翻": "該源不支援聽翻",
+            "听翻识别当前不可用": "聽翻識別目前不可用",
+            "CarPlay": "CarPlay",
+            "连接车机后，车机上会出现频道列表并可播放音频（全版本可用）；视频需 iOS 26.4 及以上、支持车载视频的车机，且仅驻车时可用。": "連接車機後，車機上會出現頻道列表並可播放音訊（全版本可用）；影片需 iOS 26.4 及以上、支援車載影片的車機，且僅駐車時可用。",
+            "iCloud 同步": "iCloud 同步",
+            "同步播放列表与设置，不同步密码；没有 iCloud 环境时静默使用本地数据。": "同步播放清單與設定，不同步密碼；沒有 iCloud 環境時靜默使用本機資料。",
+            "投屏": "投屏",
+            "正在投屏": "正在投屏",
+            "断开投屏": "斷開投屏",
+            "正在搜索设备…": "正在搜尋裝置…",
+            "未发现设备": "未發現裝置",
+            "重新搜索": "重新搜尋",
+            "投屏失败：设备拒绝了播放请求。": "投屏失敗：裝置拒絕了播放請求。",
+            "已尝试兼容路径仍失败": "已嘗試相容路徑仍失敗",
         ]
         // No machine Simplified->Traditional fallback: an untranslated key
         // is shown as-is so missing translations are visible, not silently
@@ -585,6 +1300,12 @@ final class AppState: ObservableObject {
         case "30分钟": return localized("30分钟")
         case "60分钟": return localized("60分钟")
         case "6小时": return localized("6小时")
+        // Dev round 10 (D-02/D-07): engine picker values. "API"/"AI"
+        // pass through unchanged (they are not localizable words).
+        case "system": return localized("系统")
+        // Dev round 19 (T-01): translation mode picker values.
+        case "subtitle": return localized("字幕翻")
+        case "listen": return localized("听翻")
         default: return value
         }
     }
@@ -632,16 +1353,43 @@ final class AppState: ObservableObject {
     /// the settings/form pages, never on the home page where the user
     /// actually starred or played the channel.
     @Published var saveError: String?
+    /// Dev round 2 (R2-04): a favorite id is an alias of a channel when
+    /// it is the channel id itself, or the channel id plus a legacy
+    /// "-N" suffix (dev round 1 merged same-name duplicates, so the old
+    /// suffixed ids must still resolve instead of silently dropping the
+    /// favorite). The suffix must be all digits, so a real channel id
+    /// that merely starts with another id's text never aliases.
+    static func isLegacySuffixID(_ id: String, of baseID: String) -> Bool {
+        guard id.hasPrefix(baseID + "-") else { return false }
+        let suffix = id.dropFirst(baseID.count + 1)
+        return !suffix.isEmpty && suffix.allSatisfy(\.isNumber)
+    }
+
+    func isFavorite(_ channel: Channel) -> Bool {
+        favorites.contains(channel.id) || favorites.contains { Self.isLegacySuffixID($0, of: channel.id) } || favorites.contains { channel.matchesPreMergeLineID($0) }
+    }
+
     func toggleFavorite(_ channel: Channel) {
         // Round-3 fix (C09): roll the in-memory change back when the
         // persist fails, instead of showing a starred channel that
         // vanishes on restart with no visible error on this page.
-        let wasFavorite = favorites.contains(channel.id)
-        if wasFavorite { favorites.remove(channel.id) } else { favorites.insert(channel.id) }
+        // Dev round 2 (R2-04): un-starring also removes any legacy
+        // suffixed alias, so the star cannot resurrect via the alias.
+        // Dev round 4 (R4-01): un-starring also removes pre-merge
+        // second-row hash aliases, but never an id that is another
+        // channel's own id (a hash id can coincide with one, while a
+        // "-N" alias cannot). The rollback restores the whole set,
+        // not just the entry id, so aliases removed above come back.
+        let wasFavorite = isFavorite(channel)
+        let previousFavorites = favorites
+        if wasFavorite {
+            let otherIDs = Set(allChannels.map(\.id).filter { $0 != channel.id })
+            favorites = favorites.filter { $0 != channel.id && !Self.isLegacySuffixID($0, of: channel.id) && !(channel.matchesPreMergeLineID($0) && !otherIDs.contains($0)) }
+        } else { favorites.insert(channel.id) }
         if save() {
             saveError = nil
         } else {
-            if wasFavorite { favorites.insert(channel.id) } else { favorites.remove(channel.id) }
+            favorites = previousFavorites
             saveError = localized("保存失败，数据未写入。")
         }
     }
@@ -650,8 +1398,11 @@ final class AppState: ObservableObject {
         let previousSelected = selectedChannel
         let previousRecent = recent
         selectedChannel = channel
-        recent.removeAll { $0 == channel.id }
-        recent.insert(channel.id, at: 0)
+        // Dev round 2 (R2-17): history now records when playback started.
+        // Progress stays nil until a switch/close reports a VOD position
+        // (see noteProgress); live streams never get a fabricated one.
+        recent.removeAll { $0.channelID == channel.id }
+        recent.insert(RecentEntry(channelID: channel.id, watchedAt: Date()), at: 0)
         recent = Array(recent.prefix(24))
         if save() {
             saveError = nil
@@ -660,6 +1411,16 @@ final class AppState: ObservableObject {
             recent = previousRecent
             saveError = localized("保存失败，数据未写入。")
         }
+    }
+
+    /// Dev round 2 (R2-17): record the last VOD position fraction for a
+    /// channel already in history. A nil progress (live stream, or an
+    /// unknown duration) clears any stale fraction rather than inventing
+    /// one. No-op when the channel has no history entry yet.
+    func noteProgress(_ channel: Channel, progress: Double?) {
+        guard let index = recent.firstIndex(where: { $0.channelID == channel.id }) else { return }
+        if let progress { recent[index].progress = min(max(progress, 0), 1) } else { recent[index].progress = nil }
+        save()
     }
 
     func programs(for channel: Channel, now: Date = Date()) -> [EPGProgram] {
@@ -719,6 +1480,65 @@ final class AppState: ObservableObject {
         programs(for: channel, now: now).first { $0.start > now }
     }
 
+    /// Dev round 2 (R2-13): the x-tvg-url of the active playlist, else
+    /// the first non-empty x-tvg-url among all playlists. A manually
+    /// entered guide URL always wins; this is only the fallback when no
+    /// manual value exists. Never a fabricated default.
+    /// Dev round 4 (R4-03): only ENABLED playlists contribute, so the
+    /// automatic source follows the same enable switch as home merged
+    /// browsing and search (previously a disabled playlist's header
+    /// URL still became the guide source).
+    var autoEPGURL: String {
+        let enabled = playlists.filter(\.isEnabled)
+        if let active = enabled.first(where: { $0.id == activePlaylistID })?.autoEPGURL, !active.isEmpty { return active }
+        return enabled.compactMap { $0.autoEPGURL }.first(where: { !$0.isEmpty }) ?? ""
+    }
+
+    /// Dev round 2 (R2-13): true when the effective guide source comes
+    /// from a playlist header rather than a manually entered address.
+    var epgIsAuto: Bool {
+        (UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !epgURL.isEmpty
+    }
+
+    /// Dev round 2 (R2-13): after a playlist commit changes the available
+    /// x-tvg-url values, adopt a new effective source only when no manual
+    /// value exists and the effective value actually changed. A source
+    /// that vanished clears the stale guide instead of keeping it.
+    func applyAutoEPGURLIfNeeded() {
+        guard (UserDefaults.standard.string(forKey: "nanostream.epgURL") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let effective = autoEPGURL
+        guard effective != epgURL else { return }
+        epgURL = effective
+        if !effective.isEmpty { reloadEPG(); startEPGRefreshLoop() } else { epgGuide = .empty; epgLastUpdated = nil }
+    }
+
+    /// Dev round 2 (R2-12): home merged browsing follows this switch.
+    /// Disabling never touches favorites, history or detail browsing.
+    func setPlaylistEnabled(_ playlist: Playlist, _ enabled: Bool) {
+        guard let index = playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+        playlists[index].isEnabled = enabled
+        save()
+    }
+
+    /// Dev round 2 (R2-11): request timeouts, clamped to 5...120 seconds.
+    /// Stored values of 0 or less are treated as unset by readers.
+    func setM3UTimeout(_ seconds: Double) {
+        m3uTimeoutSeconds = min(max(seconds, 5), 120)
+        UserDefaults.standard.set(m3uTimeoutSeconds, forKey: "nanostream.m3uTimeout")
+    }
+
+    func setEPGTimeout(_ seconds: Double) {
+        epgTimeoutSeconds = min(max(seconds, 5), 120)
+        UserDefaults.standard.set(epgTimeoutSeconds, forKey: "nanostream.epgTimeout")
+    }
+
+    /// Dev round 2 (R2-15): the programme airing now for a channel, or
+    /// nil when the guide has none (cards render nothing in that case).
+    func currentProgram(for channel: Channel) -> EPGProgram? {
+        let now = Date()
+        return programs(for: channel, now: now).first { $0.start <= now && $0.end > now }
+    }
+
     func setEPGURL(_ value: String) {
         epgDraftURL = value
         epgError = nil
@@ -763,6 +1583,11 @@ final class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: epgGuideCacheKey)
         UserDefaults.standard.removeObject(forKey: epgDraftCacheKey)
         if let url = Self.epgGuideCacheFileURL() { try? FileManager.default.removeItem(at: url) }
+        // Dev round 2 (R2-13): deleting the manual value re-exposes the
+        // playlist header's x-tvg-url (if any) instead of leaving the
+        // guide empty; the refresh interval stays deleted above.
+        epgURL = autoEPGURL
+        if !epgURL.isEmpty { reloadEPG() }
     }
 
     func setEPGRefreshInterval(_ minutes: Int) {
@@ -790,6 +1615,13 @@ final class AppState: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: interval)
                 guard !Task.isCancelled else { return }
+                // Dev round 2 (R2-08): the settings caption promises
+                // foreground-only refresh, but the old loop refreshed
+                // unconditionally. A background tick now skips the reload
+                // and keeps sleeping instead of fetching in background.
+                #if canImport(UIKit)
+                guard UIApplication.shared.applicationState == .active else { continue }
+                #endif
                 // Go through reloadEPG so the tick gets its own generation
                 // instead of racing a manual reload as a second live load.
                 await self?.reloadEPG()
@@ -860,7 +1692,27 @@ final class AppState: ObservableObject {
             .filter { $0.isLetter || $0.isNumber }
     }
 
-    func channel(for id: String) -> Channel? { allChannels.first { $0.id == id } }
+    /// Dev round 2 (R2-04): legacy "-N" suffixed ids (pre-merge
+    /// duplicates) fall back to their base id, so old favorites and
+    /// history entries keep resolving to the merged channel instead of
+    /// being filtered away as missing.
+    /// Dev round 4 (R4-01): pre-merge second-row hash ids (stableID
+    /// of name|second-row URL) fall back to the merged entry via
+    /// matchesPreMergeLineID. The round-2 alias only covered the
+    /// "-N" ids of fully duplicate rows; a second line with a
+    /// different URL was an independent row with its own hash id,
+    /// and old favorites/history pointing at it silently vanished.
+    func channel(for id: String) -> Channel? {
+        if let direct = allChannels.first(where: { $0.id == id }) { return direct }
+        if let dash = id.lastIndex(of: "-") {
+            let suffix = id[id.index(after: dash)...]
+            if !suffix.isEmpty && suffix.allSatisfy(\.isNumber) {
+                let base = String(id[..<dash])
+                if let baseMatch = allChannels.first(where: { $0.id == base }) { return baseMatch }
+            }
+        }
+        return allChannels.first { $0.matchesPreMergeLineID(id) }
+    }
 
     /// First cached channel of a playlist, used when switching subscriptions
     /// from the detail page so the player does not keep playing the old
@@ -888,9 +1740,10 @@ final class AppState: ObservableObject {
         playlistGeneration += 1
         let generation = playlistGeneration
         Task {
-            let parseTask = Task.detached(priority: .userInitiated) { M3UParser.parse(text: text, baseURL: baseURL) }
+            let parseTask = Task.detached(priority: .userInitiated) { M3UParser.parseReport(text: text, baseURL: baseURL) }
             localChannelsParseTask = parseTask
-            let parsed = await parseTask.value
+            let report = await parseTask.value
+            let parsed = report.channels
             await MainActor.run {
                 guard playlistGeneration == generation else { completion(false); return }
                 // Round-7 fix (C02): a local import bumps the generation,
@@ -908,14 +1761,19 @@ final class AppState: ObservableObject {
                 KeychainStore.deletePassword(for: playlist.id)
                 updated.channelCount = parsed.count
                 updated.lastRefresh = Date()
+                // Dev round 2 (R2-13): a local re-import refreshes the
+                // header guide address too (cleared when the header
+                // no longer carries one, never left stale).
+                updated.autoEPGURL = report.tvgURL
                 playlists[index] = updated
                 channelSetsByPlaylist[playlist.id] = parsed
+                applyAutoEPGURLIfNeeded()
                 if activePlaylistID == playlist.id {
                     channels = parsed
                     selectedGroup = GroupID.all
                     searchText = ""
                     selectedChannel = nil
-                    recent = recent.filter { channel(for: $0) != nil }
+                    recent = recent.filter { channel(for: $0.channelID) != nil }
                 }
                 // Round-4 fix (C11): the round-3 cleanup only ran for
                 // the active playlist. Turning a NON-active playlist
@@ -923,7 +1781,7 @@ final class AppState: ObservableObject {
                 // and recent entries pointing at its old remote snapshot.
                 // The cache above is already replaced, so a lookup that
                 // misses now really means "gone from every playlist".
-                recent = recent.filter { channel(for: $0) != nil }
+                recent = recent.filter { channel(for: $0.channelID) != nil }
                 if let selected = selectedChannel, channel(for: selected.id) == nil {
                     selectedChannel = nil
                 }
@@ -992,6 +1850,7 @@ final class AppState: ObservableObject {
                     playlists[existingIndex].name = displayName
                     playlists[existingIndex].channelCount = parsed.count
                     playlists[existingIndex].lastRefresh = Date()
+                    playlists[existingIndex].autoEPGURL = report.tvgURL
                     channelSetsByPlaylist[existing.id] = parsed
                     setNotice(localized("已刷新已有本地列表。"))
                     activePlaylistID = existing.id
@@ -1003,15 +1862,17 @@ final class AppState: ObservableObject {
                     // commit supersedes any in-flight activation/edit.
                     isLoadingPlaylist = false
                     isRefreshingPlaylist = false
+                    applyAutoEPGURLIfNeeded()
                     save()
                     completion(true)
                     return
                 }
                 channels = parsed
-                let playlist = Playlist(name: displayName, kind: .m3u, endpoint: Playlist.localFileEndpoint, channelCount: parsed.count, lastRefresh: Date())
+                let playlist = Playlist(name: displayName, kind: .m3u, endpoint: Playlist.localFileEndpoint, channelCount: parsed.count, lastRefresh: Date(), autoEPGURL: report.tvgURL)
                 playlists.insert(playlist, at: 0)
                 activePlaylistID = playlist.id
                 channelSetsByPlaylist[playlist.id] = parsed
+                applyAutoEPGURLIfNeeded()
                 selectedGroup = GroupID.all
                 searchText = ""
                 playlistError = nil
@@ -1073,7 +1934,7 @@ final class AppState: ObservableObject {
             selectedChannel = nil
         }
         // Drop recent entries that no longer exist in any playlist.
-        recent = recent.filter { channel(for: $0) != nil }
+        recent = recent.filter { channel(for: $0.channelID) != nil }
         save()
     }
 
@@ -1081,6 +1942,139 @@ final class AppState: ObservableObject {
         // Refresh the active playlist, not blindly the first one.
         guard let playlist = (activePlaylistID.flatMap { id in playlists.first(where: { $0.id == id }) } ?? playlists.first) else { return }
         activatePlaylist(playlist)
+    }
+
+    /// Dev round 4 (R4-13): refresh every remote playlist in place,
+    /// without switching the active playlist or resetting the user's
+    /// group/search (activatePlaylist would do both). Local-file
+    /// playlists have no remote content and are skipped; their
+    /// lastRefresh is left untouched, never fabricated. A playlist
+    /// that vanished mid-refresh is not resurrected, and the active
+    /// playlist's visible list is updated only while it is still
+    /// active. Failures do not abort the remaining playlists; the
+    /// first failure's localized message surfaces via playlistError.
+    /// Subscription expiry is NOT shown anywhere: no source field
+    /// carries one, and none is invented here.
+    @Published var isRefreshingAllPlaylists = false
+
+    func refreshAllPlaylists() {
+        guard !isRefreshingAllPlaylists else { return }
+        let targets = playlists.filter { !$0.isLocalFile }
+        guard !targets.isEmpty else { return }
+        isRefreshingAllPlaylists = true
+        Task {
+            var firstError: String?
+            for playlist in targets {
+                do {
+                    let loaded = try await PlaylistLoader.load(kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: password(for: playlist))
+                    guard !loaded.channels.isEmpty else { throw PlaylistLoadError.empty }
+                    await MainActor.run {
+                        guard let index = playlists.firstIndex(where: { $0.id == playlist.id }) else { return }
+                        playlists[index].channelCount = loaded.channels.count
+                        playlists[index].lastRefresh = Date()
+                        playlists[index].autoEPGURL = loaded.tvgURL
+                        channelSetsByPlaylist[playlist.id] = loaded.channels
+                        if activePlaylistID == playlist.id { channels = loaded.channels }
+                    }
+                } catch {
+                    if firstError == nil { firstError = localizedError(error) }
+                }
+            }
+            await MainActor.run {
+                isRefreshingAllPlaylists = false
+                if let firstError { playlistError = firstError }
+                applyAutoEPGURLIfNeeded()
+                save()
+            }
+        }
+    }
+
+    // Dev round 8 (R8-05): configuration export/import. Passwords
+    // are NEVER exported (they live in the Keychain, not in the
+    // Playlist value); an imported Xtream playlist therefore starts
+    // without a password and its first refresh fails with the
+    // existing explicit "empty account/password" error instead of
+    // silently pretending to work. Import appends playlists without
+    // fetching: channels load on the next refresh, and every skipped
+    // entry is reported back to the caller — never silently dropped.
+    struct ExportedPlaylist: Codable {
+        var name: String
+        var kind: PlaylistKind
+        var endpoint: String
+        var username: String
+        var isEnabled: Bool
+    }
+
+    struct ExportedSettings: Codable {
+        var language: String?
+        var themeMode: String?
+        var colorTheme: String?
+        var preferredPlayer: String?
+        var bufferMilliseconds: Double?
+        var m3uTimeoutSeconds: Double?
+        var epgTimeoutSeconds: Double?
+        var previewEnabled: Bool?
+        var previewLimit: Int?
+        var globalBitrateCap: Double?
+        var playbackNotReadyTimeout: Double?
+        var deinterlace: Bool?
+    }
+
+    struct ConfigurationExport: Codable {
+        var version: Int
+        var playlists: [ExportedPlaylist]
+        var settings: ExportedSettings
+    }
+
+    func exportConfigurationData() -> Data? {
+        let exported = ConfigurationExport(
+            version: 1,
+            playlists: playlists.map { ExportedPlaylist(name: $0.name, kind: $0.kind, endpoint: $0.endpoint, username: $0.username, isEnabled: $0.isEnabled) },
+            settings: ExportedSettings(language: language, themeMode: themeMode, colorTheme: colorTheme, preferredPlayer: preferredPlayer.rawValue, bufferMilliseconds: networkBufferMilliseconds, m3uTimeoutSeconds: m3uTimeoutSeconds, epgTimeoutSeconds: epgTimeoutSeconds, previewEnabled: previewEnabled, previewLimit: previewLimit, globalBitrateCap: globalBitrateCap, playbackNotReadyTimeout: playbackNotReadyTimeout, deinterlace: deinterlace)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? encoder.encode(exported)
+    }
+
+    /// Imports one exported file. Returns (added, failures) where each
+    /// failure names the entry and the reason; callers render both.
+    /// Unknown settings keys are ignored, never applied blindly.
+    func importConfiguration(_ data: Data) -> (added: Int, failures: [(String, String)]) {
+        guard let decoded = try? JSONDecoder().decode(ConfigurationExport.self, from: data) else {
+            return (0, [(localized("配置文件"), localized("文件格式无效。"))])
+        }
+        var added = 0
+        var failures: [(String, String)] = []
+        for entry in decoded.playlists {
+            let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let endpoint = entry.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty || endpoint.isEmpty {
+                failures.append((name.isEmpty ? localized("未命名播放列表") : name, localized("播放列表名称或地址为空。")))
+                continue
+            }
+            if entry.kind == .m3u, Playlist.localFileEndpoint == endpoint {
+                failures.append((name, localized("本地文件播放列表无法通过配置导入。")))
+                continue
+            }
+            playlists.append(Playlist(name: name, kind: entry.kind, endpoint: endpoint, username: entry.username, isEnabled: entry.isEnabled))
+            added += 1
+        }
+        let settings = decoded.settings
+        if let value = settings.language, Self.supportedLanguages.contains(value) { setLanguage(value) }
+        if let value = settings.themeMode, ["System", "Light", "Dark"].contains(value) { setTheme(value) }
+        if let value = settings.colorTheme { setColorTheme(value) }
+        if let raw = settings.preferredPlayer, let player = PreferredPlayer(rawValue: raw) { setPreferredPlayer(player) }
+        if let value = settings.bufferMilliseconds { setBuffer(value) }
+        if let value = settings.m3uTimeoutSeconds { setM3UTimeout(value) }
+        if let value = settings.epgTimeoutSeconds { setEPGTimeout(value) }
+        if let value = settings.previewEnabled { setPreviewEnabled(value) }
+        if let value = settings.previewLimit { setPreviewLimit(value) }
+        if let value = settings.globalBitrateCap { setGlobalBitrateCap(value) }
+        if let value = settings.playbackNotReadyTimeout { setPlaybackNotReadyTimeout(value) }
+        if let value = settings.deinterlace { setDeinterlace(value) }
+        save()
+        return (added, failures)
     }
 
     /// Cancels an in-flight playlist load (used when the user abandons a
@@ -1129,12 +2123,16 @@ final class AppState: ObservableObject {
             channels = channelSetsByPlaylist[playlist.id] ?? []
             isLoadingPlaylist = false
             isRefreshingPlaylist = false
+            // Dev round 2 (R2-13): switching the active playlist can
+            // change the effective automatic guide source.
+            applyAutoEPGURLIfNeeded()
             return
         }
         if let cached = channelSetsByPlaylist[playlist.id] {
             channels = cached
             isLoadingPlaylist = false
             isRefreshingPlaylist = true
+            applyAutoEPGURLIfNeeded()
         } else {
             channels = []
             isLoadingPlaylist = true
@@ -1202,6 +2200,12 @@ final class AppState: ObservableObject {
             KeychainStore.deletePassword(for: playlist.id)
             renamed.channelCount = old.channelCount
             renamed.lastRefresh = old.lastRefresh
+            // Dev round 2 (R2-12/R2-13): the edit form rebuilds a
+            // Playlist from its fields, so the enable switch and the
+            // header guide address must be carried over from the old
+            // object or a rename would silently re-enable / drop them.
+            renamed.isEnabled = old.isEnabled
+            renamed.autoEPGURL = old.autoEPGURL
             playlists[index] = renamed
             // A type change TO local must not keep the old remote playlist's
             // channels on screen as if they belonged to the local file.
@@ -1215,13 +2219,13 @@ final class AppState: ObservableObject {
                     selectedGroup = GroupID.all
                     searchText = ""
                     selectedChannel = nil
-                    recent = recent.filter { channel(for: $0) != nil }
+                    recent = recent.filter { channel(for: $0.channelID) != nil }
                 }
                 // Round-4 fix (C11): same cleanup for a NON-active
                 // playlist turned local: its cache is gone above, so a
                 // selected/recent entry that no longer resolves anywhere
                 // is stale even though this playlist was not active.
-                recent = recent.filter { channel(for: $0) != nil }
+                recent = recent.filter { channel(for: $0.channelID) != nil }
                 if let selected = selectedChannel, channel(for: selected.id) == nil {
                     selectedChannel = nil
                 }
@@ -1259,7 +2263,7 @@ final class AppState: ObservableObject {
             // edit with a blank password field would fail auth even though
             // a valid password is stored.
             let candidatePassword = playlist.password.isEmpty ? (KeychainStore.password(for: old.id) ?? "") : playlist.password
-            let loaded: [Channel]
+            let loaded: (channels: [Channel], tvgURL: String?)
             do {
                 loaded = try await PlaylistLoader.load(kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: candidatePassword)
             } catch {
@@ -1291,7 +2295,7 @@ final class AppState: ObservableObject {
                 // exists, polluting the current playlist's error bar.
                 // Deleted mid-load: just report failure, no global error.
                 guard playlists.contains(where: { $0.id == playlist.id }) else { completion(false); return }
-                guard !loaded.isEmpty else {
+                guard !loaded.channels.isEmpty else {
                     // Round-6 fix (C02): the old code returned without
                     // touching the loading flags here (and in the two
                     // branches below). The generation guard above already
@@ -1343,16 +2347,23 @@ final class AppState: ObservableObject {
                 }
                 var committed = playlist
                 committed.password = ""
-                committed.channelCount = loaded.count
+                committed.channelCount = loaded.channels.count
                 committed.lastRefresh = Date()
+                // Dev round 2 (R2-12/R2-13): same form-rebuild hazard
+                // as the local branch — keep the enable switch — and
+                // the fresh load's header guide address becomes the
+                // playlist's automatic source.
+                committed.isEnabled = old.isEnabled
+                committed.autoEPGURL = loaded.tvgURL
                 playlists[currentIndex] = committed
-                channelSetsByPlaylist[playlist.id] = loaded
+                channelSetsByPlaylist[playlist.id] = loaded.channels
+                applyAutoEPGURLIfNeeded()
                 // If the user switched subscriptions while this edit was
                 // loading, commit the metadata and cache but do not clobber
                 // the now-current playlist's channels or active id.
                 if playlistGeneration == startGeneration {
                     activePlaylistID = playlist.id
-                    channels = loaded
+                    channels = loaded.channels
                     selectedGroup = GroupID.all
                     searchText = ""
                     // Round-4 fix (C02): this commit superseded the
@@ -1403,6 +2414,16 @@ final class AppState: ObservableObject {
     }
 
     func clearHistory() { recent.removeAll(); save() }
+
+    /// Dev round 4 (R4-09): delete one history entry (HistoryView
+    /// swipe-to-delete). Removing the entry never touches favorites,
+    /// and a persist failure restores the entry instead of dropping
+    /// it silently. Clear-all reuses the existing clearHistory().
+    func removeHistoryEntry(channelID: String) {
+        let previous = recent
+        recent.removeAll { $0.channelID == channelID }
+        if !save() { recent = previous; saveError = localized("保存失败，数据未写入。") } else { saveError = nil }
+    }
     func clearFavorites() { favorites.removeAll(); save() }
     func clearImageCache() { URLCache.shared.removeAllCachedResponses(); setNotice(localized("图片缓存已清除。")) }
 
@@ -1422,7 +2443,7 @@ final class AppState: ObservableObject {
         playlistError = nil
         do {
             let loaded = try await PlaylistLoader.load(kind: kind, endpoint: endpoint, username: username, password: password)
-            guard !loaded.isEmpty else { throw PlaylistLoadError.empty }
+            guard !loaded.channels.isEmpty else { throw PlaylistLoadError.empty }
             // Round-2 fix: a superseded import previously returned without
             // calling completion at all, leaving the form's save spinner
             // running forever. Report failure (without touching state, so
@@ -1430,7 +2451,7 @@ final class AppState: ObservableObject {
             // form only shows an error when playlistError is actually set,
             // so a superseded import just resets the spinner.
             guard playlistGeneration == generation else { await completion(false); return }
-            let playlist = Playlist(name: name.isEmpty ? "新播放列表" : name, kind: kind, endpoint: endpoint, username: username, password: "", channelCount: loaded.count, lastRefresh: Date())
+            let playlist = Playlist(name: name.isEmpty ? "新播放列表" : name, kind: kind, endpoint: endpoint, username: username, password: "", channelCount: loaded.channels.count, lastRefresh: Date(), autoEPGURL: loaded.tvgURL)
             // Round-3 fix (C14): same credential-before-commit order as
             // updatePlaylist — a failed Keychain write aborts the import
             // instead of leaving a playlist whose password was never stored.
@@ -1451,10 +2472,11 @@ final class AppState: ObservableObject {
                     return
                 }
             }
-            channels = loaded
+            channels = loaded.channels
             playlists.insert(playlist, at: 0)
             activePlaylistID = playlist.id
-            channelSetsByPlaylist[playlist.id] = loaded
+            channelSetsByPlaylist[playlist.id] = loaded.channels
+            applyAutoEPGURLIfNeeded()
             selectedGroup = GroupID.all
             searchText = ""
             // Round-4 fix (C04): same Keychain/save ordering hazard as
@@ -1504,18 +2526,20 @@ final class AppState: ObservableObject {
         playlistError = nil
         do {
             let loaded = try await PlaylistLoader.load(kind: playlist.kind, endpoint: playlist.endpoint, username: playlist.username, password: password(for: playlist))
-            guard !loaded.isEmpty else { throw PlaylistLoadError.empty }
+            guard !loaded.channels.isEmpty else { throw PlaylistLoadError.empty }
             // Discard stale results: deleted playlists must not resurrect,
             // and a slower earlier load must not overwrite a newer active one.
             guard playlistGeneration == effectiveGeneration,
                   playlists.contains(where: { $0.id == playlist.id }),
                   activePlaylistID == playlist.id else { return false }
-            channels = loaded
-            channelSetsByPlaylist[playlist.id] = loaded
+            channels = loaded.channels
+            channelSetsByPlaylist[playlist.id] = loaded.channels
             if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
-                playlists[index].channelCount = loaded.count
+                playlists[index].channelCount = loaded.channels.count
                 playlists[index].lastRefresh = Date()
+                playlists[index].autoEPGURL = loaded.tvgURL
             }
+            applyAutoEPGURLIfNeeded()
             selectedGroup = GroupID.all
             searchText = ""
             save()
@@ -1545,7 +2569,59 @@ final class AppState: ObservableObject {
         // A backup from a previous corrupt restore is now expired: the
         // current state saved cleanly, so the stale backup must not linger.
         UserDefaults.standard.removeObject(forKey: storageKey + ".bak")
+        // Dev round 10 (D-04): push the new snapshot to iCloud
+        // key-value storage when sync is enabled. The push itself
+        // no-ops without an iCloud environment, and it never carries
+        // passwords (they live in the Keychain, not in SavedState).
+        if iCloudSyncEnabled { ICloudSync.shared.push(from: self) }
         return true
+    }
+
+    // Dev round 10 (D-04): the iCloud snapshot. Playlists carry
+    // metadata only (id, name, kind, endpoint, username); settings
+    // carry the plain preferences. No password, no key, no token.
+    struct ICloudSnapshot: Codable {
+        struct PlaylistMeta: Codable { var id: UUID; var name: String; var kind: String; var endpoint: String; var username: String }
+        var updatedAt: Date
+        var playlists: [PlaylistMeta]
+        var activePlaylistID: UUID?
+        var language: String
+        var preferredPlayer: String
+        var themeMode: String
+    }
+
+    func iCloudSnapshot() -> ICloudSnapshot {
+        ICloudSnapshot(
+            updatedAt: Date(),
+            playlists: playlists.map { ICloudSnapshot.PlaylistMeta(id: $0.id, name: $0.name, kind: $0.kind.rawValue, endpoint: $0.endpoint, username: $0.username) },
+            activePlaylistID: activePlaylistID,
+            language: language,
+            preferredPlayer: preferredPlayer.rawValue,
+            themeMode: themeMode
+        )
+    }
+
+    /// Dev round 10 (D-04): applies a remote snapshot only when it is
+    /// newer than the last snapshot this device pushed or applied.
+    /// Last-write-wins by timestamp; a stale remote never overwrites
+    /// newer local data, and a remote playlist list never deletes
+    /// local playlists that are not in it (merge by id, local wins
+    /// on conflict).
+    func applyICloudSnapshot(_ snapshot: ICloudSnapshot) {
+        let last = UserDefaults.standard.object(forKey: "nanostream.icloud.lastApplied") as? Date ?? .distantPast
+        guard snapshot.updatedAt > last else { return }
+        UserDefaults.standard.set(snapshot.updatedAt, forKey: "nanostream.icloud.lastApplied")
+        // Settings apply directly; playlists merge by id so a remote
+        // list can add entries but never silently drops local ones.
+        if AppState.supportedLanguages.contains(snapshot.language) { setLanguage(snapshot.language) }
+        if let player = PreferredPlayer(rawValue: snapshot.preferredPlayer) { setPreferredPlayer(player) }
+        setTheme(snapshot.themeMode)
+        var merged = playlists
+        for meta in snapshot.playlists where !merged.contains(where: { $0.id == meta.id }) {
+            guard let kind = PlaylistKind(rawValue: meta.kind) else { continue }
+            merged.append(Playlist(id: meta.id, name: meta.name, kind: kind, endpoint: meta.endpoint, username: meta.username))
+        }
+        if merged.count != playlists.count { playlists = merged; _ = save() }
     }
 
     private static func restore(data: Data) -> SavedState? {
@@ -1596,11 +2672,11 @@ private struct SavedState: Codable {
     var channels: [Channel]
     var playlists: [Playlist]
     var favorites: Set<String>
-    var recent: [String]
+    var recent: [RecentEntry]
     var activePlaylistID: UUID?
     var channelSetsByPlaylist: [UUID: [Channel]]?
 
-    init(channels: [Channel], playlists: [Playlist], favorites: Set<String>, recent: [String], activePlaylistID: UUID?, channelSetsByPlaylist: [UUID: [Channel]]) {
+    init(channels: [Channel], playlists: [Playlist], favorites: Set<String>, recent: [RecentEntry], activePlaylistID: UUID?, channelSetsByPlaylist: [UUID: [Channel]]) {
         self.channels = channels
         self.playlists = playlists
         self.favorites = favorites
@@ -1619,7 +2695,14 @@ private struct SavedState: Codable {
         channels = Self.tolerantArray(from: container, forKey: .channels)
         playlists = Self.tolerantArray(from: container, forKey: .playlists)
         favorites = Set(Self.tolerantArray(from: container, forKey: .favorites) as [String])
-        recent = Self.tolerantArray(from: container, forKey: .recent)
+        // Dev round 2 (R2-17): old saves stored plain channel ids;
+        // they migrate with nil watch time and progress (nothing is
+        // fabricated). New saves decode per element, tolerantly.
+        if let legacy = try? container.decode([String].self, forKey: .recent) {
+            recent = legacy.map { RecentEntry(channelID: $0) }
+        } else {
+            recent = Self.tolerantArray(from: container, forKey: .recent)
+        }
         activePlaylistID = try container.decodeIfPresent(UUID.self, forKey: .activePlaylistID)
         // Round-3 fix (C02): the channel cache used to decode as one
         // all-or-nothing dictionary, so a single corrupt channel in any
@@ -1723,9 +2806,13 @@ enum GridLayout: String, CaseIterable, Identifiable {
     case twoColumns = "2列"
     case threeColumns = "3列"
     case fourColumns = "4列"
+    // Dev round 2 (R2-16): one row per channel, with the same row
+    // information as the detail list (name, group, current programme,
+    // quality badge; empty when the guide has none).
+    case list = "列表"
     var id: String { rawValue }
     var columns: Int {
-        switch self { case .twoColumns: return 2; case .threeColumns: return 3; case .fourColumns: return 4 }
+        switch self { case .twoColumns: return 2; case .threeColumns: return 3; case .fourColumns: return 4; case .list: return 1 }
     }
 }
 
@@ -1750,7 +2837,7 @@ enum PlaylistLoadError: LocalizedError {
 }
 
 enum PlaylistLoader {
-    static func load(kind: PlaylistKind, endpoint: String, username: String, password: String) async throws -> [Channel] {
+    static func load(kind: PlaylistKind, endpoint: String, username: String, password: String) async throws -> (channels: [Channel], tvgURL: String?) {
         switch kind {
         case .m3u:
             return try await M3UParser.fetch(endpoint: endpoint)
@@ -1867,8 +2954,15 @@ enum M3UParser {
 
     /// Session shared by playlist/EPG fetches: a complete, identifiable
     /// User-Agent (never the previously truncated "Mozilla/5.0 ... " default)
-    /// and, when the user configured one, an HTTP proxy. KSPlayer itself does
-    /// not read these settings; that gap is documented in the README.
+    /// and, when the user configured one, an HTTP proxy. Dev round 2
+    /// (R2-09/R2-10): the same UA is also handed to KSPlayer playback
+    /// (KSOptions.userAgent) and to system-player playback (see
+    /// PlaybackItemFactory in ContentView); the HTTP proxy is also
+    /// applied to system-player playback there, but KSPlayer playback
+    /// still does not read the proxy setting — no verifiable proxy
+    /// interface was found in KSPlayer 2.3.4's documented options, so
+    /// the settings caption states that scope explicitly instead of
+    /// implying a global proxy.
     /// Round-3 fix (C24): the session is cached and reused while the
     /// UA/proxy settings are unchanged, instead of building (and never
     /// invalidating) a new URLSession on every fetch and retry.
@@ -2294,7 +3388,7 @@ enum M3UParser {
         return (data, response)
     }
 
-    static func fetch(endpoint: String, username: String = "", password: String = "") async throws -> [Channel] {
+    static func fetch(endpoint: String, username: String = "", password: String = "") async throws -> (channels: [Channel], tvgURL: String?) {
         guard var url = URL(string: endpoint.trimmingCharacters(in: .whitespacesAndNewlines)), ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { throw PlaylistLoadError.invalidURL }
         // Round-2 fix: credentials embedded in the URL itself (userinfo)
         // are used for Basic Auth and stripped from the request URL, so a
@@ -2315,7 +3409,10 @@ enum M3UParser {
             if let clean = stripped.url { url = clean }
         }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 30
+        // Dev round 2 (R2-11): the timeout is user-adjustable
+        // (nanostream.m3uTimeout); a stored value of 0 or less falls
+        // back to the old hardcoded 30 seconds.
+        request.timeoutInterval = { let v = UserDefaults.standard.double(forKey: "nanostream.m3uTimeout"); return v > 0 ? v : 30 }()
         if !effectiveUsername.isEmpty || !effectivePassword.isEmpty {
             let credentials = Data("\(effectiveUsername):\(effectivePassword)".utf8).base64EncodedString()
             request.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
@@ -2338,7 +3435,7 @@ enum M3UParser {
                 let reportBaseURL = url
                 let report = await Task.detached(priority: .userInitiated) { parseReport(text: text, baseURL: reportBaseURL) }.value
                 guard !report.channels.isEmpty else { throw PlaylistLoadError.empty }
-                return report.channels
+                return (report.channels, report.tvgURL)
             } catch let error as PlaylistLoadError {
                 throw error
             } catch {
@@ -2362,15 +3459,21 @@ enum M3UParser {
         parseReport(text: text, baseURL: baseURL).channels
     }
 
-    static func parseReport(text: String, baseURL: URL? = nil) -> (channels: [Channel], skipped: Int) {
+    static func parseReport(text: String, baseURL: URL? = nil) -> (channels: [Channel], skipped: Int, tvgURL: String?) {
         var result: [Channel] = []
         var skipped = 0
         var pendingName: String?
         var pendingLogo: URL?
         var pendingEPGID: String?
         var pendingQuality: String?
+        // Dev round 1 (DEV-MODEL): standard M3U channel number and
+        // catchup template, carried into Channel (empty when absent).
+        var pendingChannelNumber: String?
+        var pendingCatchupSource: String?
         var pendingIsLive = true
         var extgrpGroup: String?
+        // Dev round 2 (R2-13): the playlist header's own guide address.
+        var headerTVGURL: String?
         var pendingGroup = GroupID.other
         let lines = text.replacingOccurrences(of: "\u{feff}", with: "").split(whereSeparator: \.isNewline).map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
         func resolve(_ raw: String) -> URL? {
@@ -2395,6 +3498,19 @@ enum M3UParser {
             }
             return nil
         }
+        // Dev round 8 (R8-11): stream-line addresses only. An absolute
+        // rtsp:// URL is admitted here; logos keep going through
+        // resolve() above, which still drops non-http(s) schemes.
+        // A relative entry can never become rtsp (its base is an
+        // http/file playlist address), so no relative branch is added.
+        func resolveStream(_ raw: String) -> URL? {
+            if let url = resolve(raw) { return url }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let url = URL(string: trimmed), url.scheme?.lowercased() == "rtsp" { return url }
+            if let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+               let url = URL(string: encoded), url.scheme?.lowercased() == "rtsp" { return url }
+            return nil
+        }
         /// Round-3 fix (C26): a real M3U group literally named "__all__"
         /// or "__other__" used to collide with the internal sentinels and
         /// get hidden or relabelled. Such names are escaped with a
@@ -2405,6 +3521,7 @@ enum M3UParser {
         }
         func flushPending() {
             pendingName = nil; pendingLogo = nil; pendingEPGID = nil; pendingQuality = nil
+            pendingChannelNumber = nil; pendingCatchupSource = nil
             pendingIsLive = true; pendingGroup = extgrpGroup ?? GroupID.other
         }
         // Round-4 fix (C13): the parse is synchronous, so cancelling its
@@ -2415,9 +3532,14 @@ enum M3UParser {
         var lineIndex = 0
         for line in lines {
             lineIndex += 1
-            if lineIndex % 512 == 0, Task.isCancelled { return ([], skipped) }
+            if lineIndex % 512 == 0, Task.isCancelled { return ([], skipped, headerTVGURL) }
             let upper = line.uppercased()
-            if upper.hasPrefix("#EXTGRP:") {
+            if upper.hasPrefix("#EXTM3U") {
+                // Dev round 2 (R2-13): the header's x-tvg-url becomes
+                // the playlist's automatic guide source (manual entry
+                // still wins at AppState level). First header wins.
+                if headerTVGURL == nil { headerTVGURL = attribute("x-tvg-url", in: line)?.nonEmpty }
+            } else if upper.hasPrefix("#EXTGRP:") {
                 extgrpGroup = escapedGroup(line.dropFirst("#EXTGRP:".count).trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? GroupID.other)
                 pendingGroup = extgrpGroup ?? GroupID.other
             } else if upper.hasPrefix("#EXTINF") {
@@ -2431,6 +3553,8 @@ enum M3UParser {
                 pendingLogo = attribute("tvg-logo", in: line).flatMap(resolve)
                 pendingEPGID = attribute("tvg-id", in: line)?.nonEmpty
                 pendingQuality = attribute("resolution", in: line) ?? attribute("quality", in: line)
+                pendingChannelNumber = attribute("tvg-chno", in: line)?.nonEmpty
+                pendingCatchupSource = attribute("catchup-source", in: line)?.nonEmpty
                 pendingIsLive = extinfIsLive(line)
             } else if upper.hasPrefix("#EXTVLCOPT") {
                 // Deliberately not applied: AVPlayer/KSPlayer do not consume
@@ -2443,8 +3567,8 @@ enum M3UParser {
                 // Kodi-style "|Header=..." suffixes are not applied to playback
                 // (neither player consumes them); only the URL part is kept.
                 let streamPart = line.split(separator: "|", maxSplits: 1).first.map(String.init) ?? line
-                guard let url = resolve(streamPart) else { skipped += 1; flushPending(); continue }
-                result.append(Channel(name: pending, group: pendingGroup, streamURL: url, logoURL: pendingLogo, epgID: pendingEPGID, quality: pendingQuality, isLive: pendingIsLive))
+                guard let url = resolveStream(streamPart) else { skipped += 1; flushPending(); continue }
+                result.append(Channel(name: pending, group: pendingGroup, streamURL: url, logoURL: pendingLogo, epgID: pendingEPGID, quality: pendingQuality, isLive: pendingIsLive, channelNumber: pendingChannelNumber, catchupSource: pendingCatchupSource))
                 flushPending()
             } else if let txt = parseTXTLine(line, baseURL: baseURL) {
                 result.append(txt)
@@ -2453,22 +3577,43 @@ enum M3UParser {
             }
         }
         if pendingName != nil { skipped += 1 }
-        // Deduplicate by stable id, keeping the first occurrence, and give
-        // later duplicates a suffixed id so ForEach/favorites never collide.
-        var seen = Set<String>()
+        // Dev round 1 (DEV-MODEL) behaviour change: entries with the
+        // same name+group no longer appear as separate suffixed rows.
+        // The first occurrence keeps its id; later entries with a
+        // different stream URL become its alternateURLs (DEV-NOURL's
+        // source switch), and exact URL repeats are dropped.
+        // Dev round 2 (R2-04) merge rule, stated fully: same name AND
+        // same group AND a different stream URL merge into one entry
+        // (the alternateURLs are the distinguishing evidence); same
+        // name+group with the SAME url is a repeat and drops. Merging
+        // never discards a later entry's fields: a nil first stream
+        // URL adopts the later one, and logo/epgID/quality/
+        // channelNumber/catchupSource backfill only when the first has
+        // none. Same name but different group, or a genuinely different
+        // source that is not same-name-same-group, stays separate.
         var deduped: [Channel] = []
+        var indexByNameGroup: [String: Int] = [:]
         for channel in result {
-            if seen.insert(channel.id).inserted {
-                deduped.append(channel)
+            let key = "\(channel.name)|\(channel.group)"
+            if let index = indexByNameGroup[key] {
+                if deduped[index].streamURL == nil {
+                    deduped[index].streamURL = channel.streamURL
+                } else if let url = channel.streamURL,
+                          url != deduped[index].streamURL,
+                          !deduped[index].alternateURLs.contains(url) {
+                    deduped[index].alternateURLs.append(url)
+                }
+                if deduped[index].logoURL == nil { deduped[index].logoURL = channel.logoURL }
+                if deduped[index].epgID == nil { deduped[index].epgID = channel.epgID }
+                if deduped[index].quality.isEmpty { deduped[index].quality = channel.quality }
+                if deduped[index].channelNumber == nil { deduped[index].channelNumber = channel.channelNumber }
+                if deduped[index].catchupSource == nil { deduped[index].catchupSource = channel.catchupSource }
             } else {
-                var suffix = 2
-                var newID = "\(channel.id)-\(suffix)"
-                while seen.contains(newID) { suffix += 1; newID = "\(channel.id)-\(suffix)" }
-                seen.insert(newID)
-                deduped.append(Channel(id: newID, name: channel.name, group: channel.group, streamURL: channel.streamURL, logoURL: channel.logoURL, epgID: channel.epgID, quality: channel.quality, isLive: channel.isLive))
+                indexByNameGroup[key] = deduped.count
+                deduped.append(channel)
             }
         }
-        return (deduped, skipped)
+        return (deduped, skipped, headerTVGURL)
     }
 
     /// "Name,http://..." plain-text lines (TXT format), which the old parser
@@ -2486,7 +3631,11 @@ enum M3UParser {
         // is only trusted for a local import (base is a file URL), never
         // for a remote TXT, where it would point at the reader's disk.
         let isLocalImport = baseURL?.scheme?.lowercased() == "file"
-        let absoluteSchemes = isLocalImport ? ["http", "https", "file"] : ["http", "https"]
+        // Dev round 8 (R8-11): TXT lines are stream-only, so the
+        // absolute branch admits rtsp:// alongside http(s). The
+        // relative branches keep the old table: a relative entry
+        // against an http/file base cannot become rtsp.
+        let absoluteSchemes = isLocalImport ? ["http", "https", "file", "rtsp"] : ["http", "https", "rtsp"]
         if let url = URL(string: streamPart), absoluteSchemes.contains(url.scheme?.lowercased() ?? "") {
             return Channel(name: name, group: GroupID.other, streamURL: url)
         }
@@ -2494,9 +3643,9 @@ enum M3UParser {
         // for an already-absolute string, so a remote TXT's absolute
         // file:// address sailed past the absolute-branch rejection and
         // was admitted by this relative branch's un-gated file scheme.
-        // The relative branches now use the same local/remote scheme
-        // table as the absolute branches.
-        let relativeSchemes = absoluteSchemes
+        // The relative branches use the local/remote table without
+        // rtsp (dev round 8: rtsp is absolute-only).
+        let relativeSchemes = isLocalImport ? ["http", "https", "file"] : ["http", "https"]
         if let base = baseURL, let url = URL(string: streamPart, relativeTo: base)?.absoluteURL, relativeSchemes.contains(url.scheme?.lowercased() ?? "") {
             return Channel(name: name, group: GroupID.other, streamURL: url)
         }

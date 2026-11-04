@@ -98,6 +98,33 @@ enum KeychainStore {
         }
     }
 
+    // Dev round 10 (D-02/D-07): one shared secret store for the
+    // user-configured translation and transcription endpoints. Base
+    // URLs are not secrets and live in UserDefaults; keys NEVER do.
+    // Accounts are fixed per purpose so a translation key is never
+    // silently reused against a transcription endpoint or vice versa.
+    private static let secretService = "com.k20.nanostream.clone.secrets"
+
+    @discardableResult
+    static func saveSecret(_ secret: String, forAccount account: String) -> Bool {
+        guard !secret.isEmpty else { deleteSecret(forAccount: account); return true }
+        return save(Data(secret.utf8), service: secretService, account: account, verify: { readSecret(forAccount: account) == secret })
+    }
+
+    static func readSecret(forAccount account: String) -> String? {
+        read(service: secretService, account: account)
+    }
+
+    static func deleteSecret(forAccount account: String) {
+        delete(service: secretService, account: account)
+    }
+
+    // Fixed accounts, one per purpose (see above).
+    static let translateAPIKeyAccount = "translate.api.key"
+    static let translateAIKeyAccount = "translate.ai.key"
+    static let liveSubAPIKeyAccount = "livesub.api.key"
+    static let liveSubAIKeyAccount = "livesub.ai.key"
+
     private static func save(_ data: Data, service: String, account: String, verify: () -> Bool) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Dev round 10 (D-04/D-05): capabilities for the iOS target only.
+  - iCloud key-value store: syncs playlists + settings (never
+    passwords; passwords stay in the local Keychain). No custom
+    CloudKit container is created — NSUbiquitousKeyValueStore only.
+  - CarPlay audio: the car screen shows the channel list and plays
+    audio (see CarPlayScene.swift).
+  - CarPlay video (dev round 17, R17-01): video browsing + playback
+    on iOS 26.4+ in cars that support the video-in-car feature,
+    parked only (WWDC 2026 session 212; key documented in iOS 27
+    API tables). Declared ALONGSIDE carplay-audio, never instead
+    of it — content that suits both keeps both entitlements. The
+    video key needs Apple approval and a signed build to take
+    effect, and the vehicle must support video-in-car; neither is
+    verifiable in this repo's unsigned CI build.
+  UNVERIFIED: this repo's CI builds unsigned (CODE_SIGNING_ALLOWED=NO),
+  so whether these entitlements take effect under a real signed
+  build cannot be proven here — a signed-build verification item.
+  Without an iCloud environment the app silently stays local and
+  never loses local data (see ICloudSync.swift).
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)$(CFBundleIdentifier)</string>
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
+	<key>com.apple.developer.carplay-video</key>
+	<true/>
+</dict>
+</plist>

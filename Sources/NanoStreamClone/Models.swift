@@ -16,8 +16,21 @@ struct Channel: Identifiable, Hashable, Codable {
     var epgID: String?
     var quality: String
     var isLive: Bool
+    // Dev round 1 (DEV-MODEL): optional channel number (M3U tvg-chno),
+    // alternate/lineup URLs merged from duplicate entries of the same
+    // name+group, and a catchup template (M3U catchup-source) used by
+    // DEV-REPLAY. All three stay empty when the source does not provide
+    // them; nothing here is ever guessed from the channel name.
+    var channelNumber: String?
+    var alternateURLs: [URL]
+    var catchupSource: String?
+    // Dev round 8 (R8-08): user-assigned tags. Never filled from the
+    // source at import (nothing is guessed); the AppState tag map is
+    // the source of truth and re-attaches them after every refresh,
+    // so a re-parse never wipes them. Empty stays empty.
+    var tags: [String]
 
-    init(id: String? = nil, name: String, group: String, streamURL: URL? = nil, logoURL: URL? = nil, epgID: String? = nil, quality: String? = nil, isLive: Bool = true) {
+    init(id: String? = nil, name: String, group: String, streamURL: URL? = nil, logoURL: URL? = nil, epgID: String? = nil, quality: String? = nil, isLive: Bool = true, channelNumber: String? = nil, alternateURLs: [URL] = [], catchupSource: String? = nil, tags: [String] = []) {
         self.id = id ?? Self.stableID(name: name, streamURL: streamURL)
         self.name = name
         self.group = group.isEmpty ? GroupID.other : group
@@ -26,9 +39,26 @@ struct Channel: Identifiable, Hashable, Codable {
         self.epgID = epgID
         self.quality = Self.normalizedQuality(quality)
         self.isLive = isLive
+        self.channelNumber = channelNumber?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.alternateURLs = alternateURLs
+        self.catchupSource = catchupSource?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.tags = Self.normalizedTags(tags)
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, group, streamURL, logoURL, epgID, quality, isLive }
+    /// Trimmed, deduplicated, order-preserving. Used by init and by
+    /// AppState's tag map so both sides agree on what a tag list is.
+    static func normalizedTags(_ tags: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for tag in tags {
+            let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty, seen.insert(cleaned).inserted else { continue }
+            result.append(cleaned)
+        }
+        return result
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, group, streamURL, logoURL, epgID, quality, isLive, channelNumber, alternateURLs, catchupSource, tags }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -40,6 +70,29 @@ struct Channel: Identifiable, Hashable, Codable {
         epgID = try container.decodeIfPresent(String.self, forKey: .epgID)
         quality = Self.normalizedQuality(try container.decodeIfPresent(String.self, forKey: .quality))
         isLive = try container.decodeIfPresent(Bool.self, forKey: .isLive) ?? true
+        // decodeIfPresent keeps caches written before dev round 1
+        // readable: the new fields simply default to empty.
+        channelNumber = try container.decodeIfPresent(String.self, forKey: .channelNumber)
+        alternateURLs = try container.decodeIfPresent([URL].self, forKey: .alternateURLs) ?? []
+        catchupSource = try container.decodeIfPresent(String.self, forKey: .catchupSource)
+        // decodeIfPresent keeps caches written before dev round 8
+        // readable: untagged channels simply decode to [].
+        tags = Self.normalizedTags(try container.decodeIfPresent([String].self, forKey: .tags) ?? [])
+    }
+
+    /// Dev round 4 (R4-01): whether an id belongs to one of the
+    /// pre-merge independent rows that folded into this entry. The
+    /// first row's id is the entry id itself (a direct match); a
+    /// second row's id was stableID(name|its URL), and that URL now
+    /// lives in streamURL (adopted when the first row had none) or in
+    /// alternateURLs. Matching those ids keeps old favorites and
+    /// history resolving to the merged entry instead of silently
+    /// disappearing. Nothing here is guessed: only ids the merge
+    /// actually produced from this name and these URLs match.
+    func matchesPreMergeLineID(_ id: String) -> Bool {
+        if id == self.id { return true }
+        if Self.stableID(name: name, streamURL: streamURL) == id { return true }
+        return alternateURLs.contains { Self.stableID(name: name, streamURL: $0) == id }
     }
 
     private static func stableID(name: String, streamURL: URL?) -> String {
@@ -52,6 +105,34 @@ struct Channel: Identifiable, Hashable, Codable {
             second &*= 14029467366897019727
         }
         return String(format: "%016llx%016llx", first, second)
+    }
+
+    /// Dev round 1 (DEV-REPLAY): builds a catchup URL for a programme
+    /// from the source-provided catchup-source template, or nil when the
+    /// source gave no template or the template has no placeholder this
+    /// app understands. Supported placeholders (unix seconds unless
+    /// noted): {start} / {utc_start}, {end} / {utc_end}, {duration}
+    /// (seconds). A template without any of these is NOT guessed at:
+    /// callers show an explicit "unsupported format" prompt instead of
+    /// playing a fabricated URL.
+    func replayURL(for program: EPGProgram) -> URL? {
+        guard let template = catchupSource, !template.isEmpty else { return nil }
+        let start = Int(program.start.timeIntervalSince1970)
+        let end = Int(program.end.timeIntervalSince1970)
+        let duration = max(end - start, 0)
+        var url = template
+        let substitutions: [(String, String)] = [
+            ("{start}", "\(start)"), ("{utc_start}", "\(start)"),
+            ("{end}", "\(end)"), ("{utc_end}", "\(end)"),
+            ("{duration}", "\(duration)"),
+        ]
+        var replaced = false
+        for (placeholder, value) in substitutions where url.contains(placeholder) {
+            url = url.replacingOccurrences(of: placeholder, with: value)
+            replaced = true
+        }
+        guard replaced else { return nil }
+        return URL(string: url)
     }
 
     /// Quality is only ever taken from a source-provided attribute, normalized
@@ -189,6 +270,31 @@ struct EPGGuide: Codable {
     static let empty = EPGGuide(programsByChannelID: [:], channelIDsByNormalizedName: [:])
 }
 
+/// Dev round 2 (R2-17): one history entry. watchedAt is the moment
+/// playback started; progress is the VOD position fraction (0...1) at
+/// the last switch/close, or nil for live streams and for entries
+/// migrated from the old plain-id history (no time is fabricated).
+struct RecentEntry: Codable, Hashable {
+    var channelID: String
+    var watchedAt: Date?
+    var progress: Double?
+
+    init(channelID: String, watchedAt: Date? = nil, progress: Double? = nil) {
+        self.channelID = channelID
+        self.watchedAt = watchedAt
+        self.progress = progress
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        channelID = try container.decode(String.self, forKey: .channelID)
+        watchedAt = try container.decodeIfPresent(Date.self, forKey: .watchedAt)
+        progress = try container.decodeIfPresent(Double.self, forKey: .progress)
+    }
+
+    private enum CodingKeys: String, CodingKey { case channelID, watchedAt, progress }
+}
+
 enum PlaylistKind: String, CaseIterable, Identifiable, Codable {
     case m3u = "M3U / TXT"
     case xtream = "Xtream"
@@ -212,10 +318,20 @@ struct Playlist: Identifiable, Hashable, Codable {
     var password: String
     var channelCount: Int
     var lastRefresh: Date?
+    // Dev round 2 (R2-12): whether this playlist joins the home merged
+    // browse. Defaults true; decodeIfPresent keeps old files enabled.
+    // Disabling only affects home merged browsing, never favorites,
+    // history resolution or per-playlist detail browsing.
+    var isEnabled: Bool = true
+    // Dev round 2 (R2-13): the x-tvg-url carried by this playlist's own
+    // M3U header (#EXTM3U), or nil when the header has none. Never a
+    // fabricated default; a manually entered guide URL always wins over
+    // this value when AppState resolves the effective EPG source.
+    var autoEPGURL: String?
 
     var isLocalFile: Bool { endpoint == Self.localFileEndpoint }
 
-    init(id: UUID = UUID(), name: String, kind: PlaylistKind, endpoint: String, username: String = "", password: String = "", channelCount: Int = 0, lastRefresh: Date? = nil) {
+    init(id: UUID = UUID(), name: String, kind: PlaylistKind, endpoint: String, username: String = "", password: String = "", channelCount: Int = 0, lastRefresh: Date? = nil, isEnabled: Bool = true, autoEPGURL: String? = nil) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -224,10 +340,12 @@ struct Playlist: Identifiable, Hashable, Codable {
         self.password = password
         self.channelCount = channelCount
         self.lastRefresh = lastRefresh
+        self.isEnabled = isEnabled
+        self.autoEPGURL = autoEPGURL
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, kind, endpoint, username, channelCount, lastRefresh }
-    private enum LegacyCodingKeys: String, CodingKey { case id, name, kind, endpoint, username, password, channelCount, lastRefresh }
+    private enum CodingKeys: String, CodingKey { case id, name, kind, endpoint, username, channelCount, lastRefresh, isEnabled, autoEPGURL }
+    private enum LegacyCodingKeys: String, CodingKey { case id, name, kind, endpoint, username, password, channelCount, lastRefresh, isEnabled, autoEPGURL }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -241,6 +359,8 @@ struct Playlist: Identifiable, Hashable, Codable {
         password = try container.decodeIfPresent(String.self, forKey: .password) ?? ""
         channelCount = try container.decodeIfPresent(Int.self, forKey: .channelCount) ?? 0
         lastRefresh = try container.decodeIfPresent(Date.self, forKey: .lastRefresh)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        autoEPGURL = try container.decodeIfPresent(String.self, forKey: .autoEPGURL)
     }
 
     func encode(to encoder: Encoder) throws {

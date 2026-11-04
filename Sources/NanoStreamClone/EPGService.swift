@@ -31,7 +31,10 @@ enum EPGService {
             throw EPGLoadError.invalidURL
         }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 45
+        // Dev round 2 (R2-11): the timeout is user-adjustable
+        // (nanostream.epgTimeout); a stored value of 0 or less falls
+        // back to the old hardcoded 45 seconds.
+        request.timeoutInterval = { let v = UserDefaults.standard.double(forKey: "nanostream.epgTimeout"); return v > 0 ? v : 45 }()
         request.cachePolicy = .reloadRevalidatingCacheData
         var lastError: Error?
         var fetched: Data?

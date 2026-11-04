@@ -4,6 +4,13 @@ options:
   xcodeVersion: "15.4"
   deploymentTarget:
     iOS: "16.0"
+    # Dev round 10 (D-03): one target per platform. These floors
+    # are the minimums the new shells were written against;
+    # whether KSPlayer links on each is a CI-extension item.
+    tvOS: "16.0"
+    macOS: "13.0"
+    watchOS: "9.0"
+    visionOS: "1.0"
   createIntermediateGroups: true
   groupOrdering:
     - order: [Sources, Resources]
@@ -30,7 +37,58 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone
         INFOPLIST_FILE: Resources/AppInfo.plist
-        TARGETED_DEVICE_FAMILY: "1"
+        # Dev round 10 (D-03): "1,2" covers iPhone + iPad in this
+        # one target (iPadOS reuses the iOS UI with idiom layout),
+        # so no separate iPad target is needed.
+        TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
+        # Dev round 10 (D-04/D-05): iCloud key-value + CarPlay
+        # audio capabilities. Unsigned CI builds cannot prove
+        # these entitlements take effect (see the file's header).
+        CODE_SIGN_ENTITLEMENTS: Resources/NanoStreamClone.entitlements
+  # Dev round 10 (D-03): platform targets sharing Sources.
+  # KSPlayer is listed for tvOS/macOS/visionOS the same way it
+  # is for iOS, but whether KSPlayer actually supports those
+  # platforms is UNVERIFIED — a CI-extension verification item.
+  # The watch target deliberately omits KSPlayer: it plays
+  # favorites audio with AVPlayer only.
+  NanoStreamCloneTV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: Sources/NanoStreamClone
+    dependencies:
+      - package: KSPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone.tv
+  NanoStreamCloneMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/NanoStreamClone
+    dependencies:
+      - package: KSPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone.mac
+  NanoStreamCloneWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: Sources/NanoStreamCloneWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone.watch
+  NanoStreamCloneVision:
+    type: application
+    platform: visionOS
+    sources:
+      - path: Sources/NanoStreamClone
+    dependencies:
+      - package: KSPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.k20.nanostream.clone.vision
         # SWIFT_EMIT_LOC_STRINGS removed: localization is a hand-written
     # dictionary in AppState.localized(_:), not String Catalog extraction.

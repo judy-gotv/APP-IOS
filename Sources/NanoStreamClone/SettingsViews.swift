@@ -75,13 +75,34 @@ struct SettingsView: View {
     @State private var showClearHistoryConfirm = false
     @State private var showClearFavoritesConfirm = false
     @State private var showDeleteEPGConfirm = false
+    @State private var showConfigCenter = false
+    // Dev round 10 (D-01): lab page sheet flag.
+    @State private var showLab = false
+    // Dev round 8 (R8-03): global AV bitrate cap options. 0 means
+    // unlimited; the labels are numbers plus "Mbps" and need no
+    // translation except the unlimited entry.
+    private let bitrateOptions: [(String, Double)] = [("不限", 0), ("16 Mbps", 16_000_000), ("12 Mbps", 12_000_000), ("8 Mbps", 8_000_000), ("4 Mbps", 4_000_000), ("2 Mbps", 2_000_000), ("1 Mbps", 1_000_000)]
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 14) {
                 Text(state.localized("设置")).font(.system(size: 22, weight: .bold)).padding(.top, 52)
                 SettingsSection(title: state.localized("语言"), icon: "globe") {
-                    SettingsPickerRow(title: state.localized("语言"), value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: ["English", "Tiếng Việt", "中文", "繁體中文"])
+                    // Dev round 8 (R8-01): options come from the single
+                    // source of truth (AppState.supportedLanguages), so
+                    // an option can never exist without table coverage.
+                    SettingsPickerRow(title: state.localized("语言"), value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: AppState.supportedLanguages)
                 }
+                SettingsSection(title: state.localized("配置中心"), icon: "gearshape.2") {
+                    ActionRow(title: state.localized("配置中心"), icon: "rectangle.stack") { showConfigCenter = true }
+                }
+                .sheet(isPresented: $showConfigCenter) { ConfigCenterView().environmentObject(state) }
+                // Dev round 10 (D-01): lab entry. The page itself is
+                // shared UI; the platform-exclusive capabilities
+                // (CarPlay/iCloud/DLNA) are gated separately below.
+                SettingsSection(title: state.localized("实验室"), icon: "flask") {
+                    ActionRow(title: state.localized("实验室"), icon: "flask") { showLab = true }
+                }
+                .sheet(isPresented: $showLab) { LabView().environmentObject(state) }
                 SettingsSection(title: state.localized("外观"), icon: "paintbrush") {
                     SettingsPickerRow(title: state.localized("主题模式"), value: Binding(get: { state.themeMode }, set: { state.setTheme($0) }), options: ["System", "Light", "Dark"])
                     SettingsPickerRow(title: state.localized("色彩主题"), value: Binding(get: { state.colorTheme }, set: { state.setColorTheme($0) }), options: ["cyberpunk", "sunset", "toxic", "neonPink", "deepBlue"])
@@ -93,21 +114,99 @@ struct SettingsView: View {
                     // the subtitle/UA/proxy rows all did, so users assumed
                     // it did something on AVPlayer too. It only affects
                     // KSPlayer; AVPlayer decoding is the system default.
+                    // Dev round 8 (R8-02): kept as the annotation branch
+                    // — AVFoundation exposes no hardware/software decode
+                    // switch (VideoToolbox hardware decode is automatic),
+                    // so there is nothing to wire on the AV path; the
+                    // flag intentionally gates only KSPlayer's
+                    // hardwareDecode (and the AV view's KS fallback).
                     Text(state.localized("硬件加速仅影响 KSPlayer；AVPlayer 侧为系统默认解码行为，无额外效果。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 8 (R8-03): global AV bitrate cap. The
+                    // in-player menu still overrides it for the current
+                    // item only; KSPlayer has no cap API (see caption).
+                    HStack {
+                        Text(state.localized("全局码率上限")).font(.system(size: 18))
+                        Spacer()
+                        Menu {
+                            ForEach(bitrateOptions, id: \.1) { label, bps in
+                                Button(label == "不限" ? state.localized("不限") : label) { state.setGlobalBitrateCap(bps) }
+                            }
+                        } label: {
+                            Text(state.globalBitrateCap == 0 ? state.localized("不限") : "\(Int(state.globalBitrateCap / 1_000_000)) Mbps").foregroundStyle(state.accent)
+                            Image(systemName: "chevron.up.chevron.down").foregroundStyle(state.accent)
+                        }.buttonStyle(.plain)
+                    }.padding(.vertical, 11).overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+                    Text(state.localized("仅系统播放器生效；KSPlayer 没有可用的码率上限接口。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 8 (R8-10): AV not-ready timeout, was a
+                    // hardcoded 15s. Default 15s, clamped 5...60s.
+                    HStack { Text("\(state.localized("播放未就绪超时"))  \(Int(state.playbackNotReadyTimeout))\(state.localized("秒"))").font(.system(size: 18)); Spacer(); Stepper("", value: Binding(get: { state.playbackNotReadyTimeout }, set: { state.setPlaybackNotReadyTimeout($0) }), in: 5...60, step: 5).labelsHidden() }
+                    // Dev round 8 (R8-09): deinterlacing. Wired into
+                    // KSPlayer (KSOptions.deinterlace is a
+                    // CI-verification item); AVPlayer uses the system
+                    // default decoding and has no such switch.
+                    ToggleRow(title: state.localized("反交错"), value: Binding(get: { state.deinterlace }, set: { state.setDeinterlace($0) }))
+                    Text(state.localized("反交错仅影响 KSPlayer；系统播放器使用系统默认解码。")).font(.caption).foregroundStyle(.secondary)
                     ToggleRow(title: state.localized("自动选择音轨"), value: Binding(get: { state.automaticAudioSelection }, set: { state.setAutomaticAudioSelection($0) }))
                     ToggleRow(title: state.localized("预览"), value: Binding(get: { state.previewEnabled }, set: { state.setPreviewEnabled($0) }))
+                    // Dev round 6 (R6-07): adjustable preview
+                    // concurrency (was hardcoded 4 in the pool).
+                    // Default 4, clamped 1...8 by the setter.
+                    HStack { Text("\(state.localized("预览并发上限"))  \(state.previewLimit)").font(.system(size: 18)); Spacer(); Stepper("", value: Binding(get: { state.previewLimit }, set: { state.setPreviewLimit($0) }), in: 1...8, step: 1).labelsHidden() }
+                    Text(state.localized("同时预览的路数，1–8 路。")).font(.caption).foregroundStyle(.secondary)
                     ToggleRow(title: state.localized("显示延迟"), value: Binding(get: { state.showLatency }, set: { state.setShowLatency($0) }))
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("首选播放器")).font(.system(size: 18))
                         Picker("", selection: Binding(get: { state.preferredPlayer }, set: { state.setPreferredPlayer($0) })) { ForEach(PreferredPlayer.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
-                        Text(state.localized(state.preferredPlayer == .avPlayer ? "AVPlayer 使用系统原生解码，不支持的视频轨自动交给 KSPlayer。" : state.preferredPlayer == .ksPlayer ? "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。" : "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。")).font(.caption).foregroundStyle(.secondary)
+                        Text(state.localized(state.preferredPlayer == .avPlayer ? "系统播放器只用 AVPlayer；失败时显示重试，不自动切换 KSPlayer。" : state.preferredPlayer == .ksPlayer ? "KSPlayer 使用 FFmpeg，适合更多 IPTV 流格式。" : "Auto 先尝试 AVPlayer，失败后自动切换 KSPlayer。")).font(.caption).foregroundStyle(.secondary)
                     }.padding(.vertical, 8)
                     HStack { Text("\(state.localized("字幕大小"))  \(Int(subtitleFontSize)) pt").font(.system(size: 18)); Spacer(); Stepper("", value: $subtitleFontSize, in: 12...40, step: 1).labelsHidden() }
-                    Text(state.localized("此设置暂未接入播放器字幕渲染，仅保存偏好。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 2 (R2-02): wired into both render
+                    // paths now — KSPlayer via KSOptions.textFont
+                    // (KSPlayer scales it by screen width on top of
+                    // this value), system player via
+                    // AVPlayerItem.textStyleRules with 18pt as 100%.
+                    Text(state.localized("KSPlayer 与系统播放器均按此值渲染字幕（系统播放器以 18pt 为 100% 换算，KSPlayer 再按屏幕宽度缩放）。")).font(.caption).foregroundStyle(.secondary)
                 }
+                // Dev round 10 (D-02): subtitle translation. Target
+                // language follows the app language; a failed
+                // translation shows the original with an untranslated
+                // mark; an empty base URL disables that source (never
+                // a silent fallback); keys live in the Keychain only.
+                SettingsSection(title: state.localized("字幕翻译"), icon: "captions.bubble") {
+                    ToggleRow(title: state.localized("字幕翻译"), value: Binding(get: { state.subtitleTranslationEnabled }, set: { state.setSubtitleTranslationEnabled($0) }))
+                    // Dev round 19 (T-01): translation mode choice.
+                    // Default subtitle, so existing subtitle
+                    // translation users keep their old behaviour; the
+                    // mode only changes the translation input source.
+                    SettingsPickerRow(title: state.localized("翻译模式"), value: Binding(get: { state.translationMode.rawValue }, set: { if let mode = TranslationMode(rawValue: $0) { state.setTranslationMode(mode) } }), options: TranslationMode.allCases.map(\.rawValue))
+                    SettingsPickerRow(title: state.localized("翻译来源"), value: Binding(get: { state.translationEngine.rawValue }, set: { if let engine = TranslationEngine(rawValue: $0) { state.setTranslationEngine(engine) } }), options: TranslationEngine.allCases.map(\.rawValue))
+                    LabeledField(title: state.localized("翻译接口地址"), text: Binding(get: { state.translateAPIBaseURL }, set: { state.setTranslateAPIBaseURL($0) }))
+                    SecretKeyField(title: state.localized("翻译密钥"), account: KeychainStore.translateAPIKeyAccount)
+                    LabeledField(title: state.localized("AI 翻译接口地址"), text: Binding(get: { state.translateAIBaseURL }, set: { state.setTranslateAIBaseURL($0) }))
+                    LabeledField(title: state.localized("AI 翻译模型"), text: Binding(get: { state.translateAIModel }, set: { state.setTranslateAIModel($0) }))
+                    SecretKeyField(title: state.localized("AI 翻译密钥"), account: KeychainStore.translateAIKeyAccount)
+                    Text(state.localized("目标语言跟随应用语言；翻译失败时显示原文并标注未译出；接口地址为空时对应档位不可用；密钥只存钥匙串。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 19 (T-01/T-03): listen mode needs an
+                    // audio track plus recognition authorization, and
+                    // the AI endpoint/key/model below serve both
+                    // modes — there is no second stored set.
+                    Text(state.localized("听翻需音频分轨与识别授权；无音频分轨的源不支持听翻。")).font(.caption).foregroundStyle(.secondary)
+                    Text(state.localized("AI 翻译接口地址、密钥与模型同时服务于字幕翻与听翻两模式，不另设第二套存储。")).font(.caption).foregroundStyle(.secondary)
+                }
+                // Dev round 10 (D-05) + dev round 17 (R17-01): CarPlay
+                // is iOS-only; the row is an informational caption,
+                // not a switch — CarPlay activates on connection.
+                // Audio works on all versions; video needs iOS 26.4+
+                // plus a vehicle that supports video in the car,
+                // parked only (see CarPlayScene).
+                #if os(iOS)
+                SettingsSection(title: state.localized("CarPlay"), icon: "car") {
+                    Text(state.localized("连接车机后，车机上会出现频道列表并可播放音频（全版本可用）；视频需 iOS 26.4 及以上、支持车载视频的车机，且仅驻车时可用。")).font(.caption).foregroundStyle(.secondary)
+                }
+                #endif
                 SettingsSection(title: state.localized("网络"), icon: "globe.americas") {
                     LabeledField(title: "User-Agent", text: $userAgent)
-                    Text(state.localized("留空时使用内置标识；仅用于 M3U/EPG 请求，KSPlayer 不读取此设置。")).font(.caption).foregroundStyle(.secondary)
+                    Text(state.localized("留空时使用内置标识；用于 M3U/EPG 请求与两路播放（KSPlayer 与系统播放器）。")).font(.caption).foregroundStyle(.secondary)
                     LabeledField(title: "HTTP Proxy", text: $httpProxy, placeholder: "HTTP Proxy")
                         // Round-5 fix (A01): migrate an embedded proxy
                         // password into the Keychain when the field
@@ -215,7 +314,11 @@ struct SettingsView: View {
                             proxyMigrationFailed = M3UParser.proxyMigrationFailed
                             refreshCachedProxyPasswordFlags()
                         }
-                    Text(state.localized("仅用于 M3U/EPG 请求（格式 host:port、http://host:port 或 user:pass@host:port；带认证的代理会把用户名密码发给代理服务器，密码会迁移到钥匙串中；迁移失败时仍以明文保存在本地并显示警告），KSPlayer 不读取此设置。")).font(.caption).foregroundStyle(.secondary)
+                    Text(state.localized("用于 M3U/EPG 请求与系统播放器播放（格式 host:port、http://host:port 或 user:pass@host:port；带认证的代理会把用户名密码发给代理服务器，密码会迁移到钥匙串中；迁移失败时仍以明文保存在本地并显示警告）；KSPlayer 播放不读取此设置。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 2 (R2-11): adjustable request timeouts
+                    // (were hardcoded 30s playlist / 45s EPG). 5...120s.
+                    HStack { Text("\(state.localized("播放列表超时"))  \(Int(state.m3uTimeoutSeconds))\(state.localized("秒"))").font(.system(size: 18)); Spacer(); Stepper("", value: Binding(get: { state.m3uTimeoutSeconds }, set: { state.setM3UTimeout($0) }), in: 5...120, step: 5).labelsHidden() }
+                    HStack { Text("\(state.localized("节目单超时"))  \(Int(state.epgTimeoutSeconds))\(state.localized("秒"))").font(.system(size: 18)); Spacer(); Stepper("", value: Binding(get: { state.epgTimeoutSeconds }, set: { state.setEPGTimeout($0) }), in: 5...120, step: 5).labelsHidden() }
                     // Round-3 fix (B07): an invalid proxy used to fail
                     // silently into a direct connection (and a missing or
                     // bad port silently became 8080). Show the problem
@@ -334,9 +437,24 @@ struct SettingsView: View {
                     Text(state.localized("网络连接较慢或不稳定时，可增加缓存")).font(.caption).foregroundStyle(.secondary)
                 }
                 SettingsSection(title: state.localized("数据与缓存"), icon: "externaldrive") {
+                    // Dev round 6 (R6-10): real cache usage (URLCache
+                    // memory + disk plus the guide cache file). Zero
+                    // total renders as "no data", never a fabricated
+                    // number. The clear action below is unchanged.
+                    HStack { Text(state.localized("缓存占用")).font(.system(size: 18)); Spacer(); Text(state.cacheUsageText).font(.system(size: 18, design: .monospaced)).foregroundStyle(state.accent) }
+                    Text(state.localized("图片缓存与节目单缓存的实际占用，清除图片缓存后重新计算。")).font(.caption).foregroundStyle(.secondary)
                     ActionRow(title: state.localized("清除图片缓存"), icon: "trash") { state.clearImageCache() }
                     ActionRow(title: state.localized("清除播放历史"), icon: "clock.badge.xmark") { showClearHistoryConfirm = true }
                     ActionRow(title: state.localized("清除收藏"), icon: "star.slash") { showClearFavoritesConfirm = true }
+                    // Dev round 10 (D-04): iCloud key-value sync is
+                    // iOS-only here (the capability lives in the
+                    // iOS target's entitlements). Passwords never
+                    // sync; without an iCloud environment the app
+                    // silently stays local.
+                    #if os(iOS)
+                    ToggleRow(title: state.localized("iCloud 同步"), value: Binding(get: { state.iCloudSyncEnabled }, set: { state.setICloudSyncEnabled($0) }))
+                    Text(state.localized("同步播放列表与设置，不同步密码；没有 iCloud 环境时静默使用本地数据。")).font(.caption).foregroundStyle(.secondary)
+                    #endif
                     if let notice = state.currentNotice { Text(notice).font(.caption).foregroundStyle(state.accent) }
                 }
                 .alert(state.localized("清除播放历史"), isPresented: $showClearHistoryConfirm) {
@@ -362,7 +480,10 @@ struct SettingsView: View {
                             .disabled(state.epgURL.isEmpty || state.isLoadingEPG)
                         Button(state.localized("删除节目单"), role: .destructive) { showDeleteEPGConfirm = true }
                             .buttonStyle(.bordered)
-                            .disabled(state.epgURL.isEmpty)
+                            // Dev round 2 (R2-13): an automatic source
+                            // is not a saved manual value, so there is
+                            // nothing for delete to remove.
+                            .disabled(state.epgURL.isEmpty || state.epgIsAuto)
                             .alert(state.localized("删除节目单"), isPresented: $showDeleteEPGConfirm) {
                                 Button(state.localized("删除"), role: .destructive) { state.deleteEPGSource() }
                                 Button(state.localized("关闭"), role: .cancel) {}
@@ -382,6 +503,13 @@ struct SettingsView: View {
                         state.setEPGRefreshInterval(minutes)
                     }), options: ["关闭自动刷新", "15分钟", "30分钟", "60分钟", "6小时"])
                     Text(state.localized("仅在 App 前台运行时刷新节目单。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 2 (R2-13): when the effective source
+                    // comes from a playlist header, say so and show it;
+                    // there is no manual value to delete in that case
+                    // (see the delete button's disabled condition).
+                    if state.epgIsAuto {
+                        Text("\(state.localized("当前节目单来自播放列表自带的 x-tvg-url："))\(state.epgURL)").font(.caption).foregroundStyle(.secondary)
+                    }
                     if let updated = state.epgLastUpdated, !state.epgGuide.programsByChannelID.isEmpty {
                         Text("\(state.localized("节目单已更新。"))  (updated.formatted(date: .abbreviated, time: .shortened))")
                             .font(.caption).foregroundStyle(state.accent)
