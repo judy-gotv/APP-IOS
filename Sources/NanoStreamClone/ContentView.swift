@@ -1708,10 +1708,11 @@ struct PlayerSurface: View {
     // Dev round 10 (D-01): lab Metal rendering switch, forwarded to
     // the KS view and, via the AV view, to its KS fallback (dev
     // round 12, R12-01; dev round 14, R14-01, closed the fallback
-    // passthrough and the AV declaration). Compile-fix round 1
-    // (item 19): KSPlayer 2.3.4 has no such switch, so the KS view
-    // drops the assignment and the switch is a no-op everywhere
-    // for now; the lab caption says so.
+    // passthrough and the AV declaration). Compile-fix round 2
+    // (M-01): the switch is real now — the KS view maps it to
+    // KSOptions.firstPlayerType (Metal backend on, AVFoundation
+    // backend off); the pure AV branch ignores it (AVPlayerLayer
+    // has no app-level Metal switch).
     var metalRendering: Bool = false
     // Dev round 1: VOD/replay + engine-switch + source-switch plumbing.
     // Defaults keep every other call site unchanged.
@@ -1911,11 +1912,14 @@ private struct KSCompactPlayerView: View {
     // spelling, same precedent as textFont/userAgent.
     var deinterlace: Bool = false
     // Dev round 10 (D-01): lab Metal rendering switch.
-    // Compile-fix round 1 (item 19): verified against the KSPlayer
-    // 2.3.4 source — KSOptions has no Metal switch, so the options
-    // assignment was dropped and the switch degrades to a no-op
-    // (the lab caption says so); the property stays so the
-    // PlayerSurface call shape is unchanged.
+    // Compile-fix round 2 (M-01): KSPlayer 2.3.4 has no per-options
+    // Metal switch, but it does expose backend selection through
+    // the public static KSOptions.firstPlayerType, which
+    // KSPlayerLayer.init consults (see the options getter below).
+    // On = KSMEPlayer (FFmpeg + Metal rendering), off = KSAVPlayer
+    // (AVFoundation, the default). The flag is part of the player
+    // subtree's .id, so toggling it recreates the layer with the
+    // new backend; scope is the KS path only.
     var metalRendering: Bool = false
     // Dev round 1: VOD/replay + engine-switch + source-switch plumbing.
     // Defaults keep the AV-fallback call site unchanged.
@@ -1983,6 +1987,12 @@ private struct KSCompactPlayerView: View {
                 // original, compiling code used). .id() now sits
                 // after the KSPlayer modifiers, so a retryID bump
                 // still recreates the whole player subtree.
+                // Compile-fix round 2 (M-01): metalRendering is part
+                // of the identity too, so flipping the lab Metal
+                // switch dismantles the old layer (resetPlayer clears
+                // it) and the fresh layer is created after the
+                // options getter has set firstPlayerType from the
+                // new flag — the toggle really changes the backend.
                 .onStateChanged { layer, playerState in
                     isPlaying = playerState.isPlaying
                     isBuffering = playerState == .preparing || playerState == .buffering
@@ -2037,7 +2047,7 @@ private struct KSCompactPlayerView: View {
                         ksError = state.localized(PlaybackFailure.textKey(for: kind, isTimeout: isTimeout))
                     }
                 }
-                .id(retryID)
+                .id("\(retryID)-\(metalRendering)")
             // Dev round 1 (DEV-GESTURE): the two half-width zones own
             // both taps — single tap toggles controls, double tap seeks
             // ±10s (VOD only; live streams ignore it rather than faking
@@ -2076,7 +2086,15 @@ private struct KSCompactPlayerView: View {
             .simultaneousGesture(dragGesture)
             .simultaneousGesture(MagnificationGesture().onEnded { _ in
                 gravityFill.toggle()
-                coordinator.playerLayer?.videoGravity = gravityFill ? .resizeAspectFill : .resizeAspect
+                // Compile-fix round 2 (item 1): KSPlayer 2.3.4's
+                // KSPlayerLayer has no videoGravity member (verified
+                // against the 2.3.4 tag: videoGravity only appears
+                // inside KSPlayer's own KSAVPlayer/MetalPlayView).
+                // Upstream's own fill toggle (KSVideoPlayer
+                // isScaleAspectFill) maps to player.contentMode, so
+                // the pinch toggle drives that instead; the AV path
+                // (AVPlayerLayerView) keeps its videoGravity.
+                coordinator.playerLayer?.player.contentMode = gravityFill ? .scaleAspectFill : .scaleAspectFit
             })
             if isBuffering { ProgressView().tint(.white).controlSize(.large) }
             if let ksError {
@@ -2224,26 +2242,44 @@ private struct KSCompactPlayerView: View {
         // Dev round 2 (R2-02/R2-10): subtitle size from the slider and
         // the user's custom UA (same "..." means unset rule as
         // M3UParser.configuredSession).
-        // Compile-fix round 1 (item 17): KSPlayer 2.3.4's KSOptions
-        // has no textFont — subtitle font size lives on the shared
-        // KSSubtitle.textFontSize (CGFloat), so the slider value is
+        // Compile-fix round 2 (item 3): KSPlayer 2.3.4's KSOptions
+        // has no textFont, and the shared font size does NOT live
+        // on KSSubtitle (round 1's claim was wrong — verified
+        // against the 2.3.4 tag, textFontSize is a static on
+        // SubtitleModel, which is also what the subtitle renderer
+        // reads via SubtitleModel.textFont). The slider value is
         // applied there instead of on the per-item options.
-        KSSubtitle.textFontSize = CGFloat(subtitleFontSize)
+        SubtitleModel.textFontSize = CGFloat(subtitleFontSize)
         options.userAgent = PlaybackItemFactory.effectiveUserAgent()
         // Compile-fix round 1 (item 18): KSPlayer 2.3.4's KSOptions
         // spells the deinterlace switch autoDeInterlace. AVPlayer
         // has no equivalent switch (system default).
         options.autoDeInterlace = deinterlace
-        // Compile-fix round 1 (item 19): KSPlayer 2.3.4's KSOptions
-        // has no metalRendering switch at all (verified against the
-        // 2.3.4 source: no Metal option exists), so the assignment
-        // is dropped — the lab switch is retained in settings but
-        // degrades to a no-op, and the lab caption now says so.
-        // (The AV path already ignored it; AVPlayerLayer is
-        // Metal-backed by the system with no app-level switch.)
-        // metalRendering is intentionally not read here: the switch
-        // stays in settings for a future KSPlayer version that adds
-        // such an option, but today it changes nothing.
+        // Compile-fix round 2 (M-01): KSPlayer 2.3.4's KSOptions
+        // has no per-options Metal switch, but backend selection
+        // is a real app-level primitive: the public static
+        // KSOptions.firstPlayerType (KSOptions.swift:458, default
+        // KSAVPlayer) is what KSPlayerLayer.init consults when
+        // display == .plane (KSPlayerLayer.swift init), and
+        // KSMEPlayer is the Metal-rendering backend (FFmpeg +
+        // MetalPlayView). On = KSMEPlayer, off = KSAVPlayer (the
+        // previous default path, unchanged). This getter already
+        // applies the global SubtitleModel.textFontSize above, so
+        // setting the backend selector here follows the same
+        // pattern and is guaranteed to run before KSVideoPlayer's
+        // makeUIView creates the layer. Scope: KS path only — the
+        // AV path (AVPlayerLayer, system Metal-backed) has no
+        // app-level switch and ignores this flag. Upstream caveat:
+        // an active AirPlay route forces KSAVPlayer regardless
+        // (KSPlayerLayer url didSet), and with Metal on, KS's own
+        // error fallback to secondPlayerType is a no-op because
+        // first and second are then the same backend; the app's
+        // Auto-engine AV fallback above this view is unaffected.
+        if metalRendering {
+            KSOptions.firstPlayerType = KSMEPlayer.self
+        } else {
+            KSOptions.firstPlayerType = KSAVPlayer.self
+        }
         return options
     }
 
@@ -2504,9 +2540,11 @@ private struct AdaptiveAVPlayerView: View {
     // the AV path itself has no deinterlace switch.
     var deinterlace: Bool = false
     // Dev round 14 (R14-01): lab Metal rendering switch, declared so
-    // PlayerSurface's AV calls compile. Compile-fix round 1
-    // (item 19): KSPlayer 2.3.4 has no such switch either, so the
-    // fallback view also drops it and the switch is a no-op.
+    // PlayerSurface's AV calls compile. Compile-fix round 2
+    // (M-01): the flag is forwarded to the KS fallback view, where
+    // it really selects the Metal backend; the pure AV branch of
+    // this view ignores it (AVPlayerLayer has no app-level Metal
+    // switch).
     var metalRendering: Bool = false
     // Dev round 1: same VOD/engine/source plumbing as the KS view.
     // Defaults keep the PlayerSurface call shape simple.

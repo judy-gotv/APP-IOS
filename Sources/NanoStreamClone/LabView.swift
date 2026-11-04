@@ -90,12 +90,15 @@ struct LabView: View {
                     labToggle(
                         title: state.localized("Metal 渲染"),
                         value: Binding(get: { state.labMetalRendering }, set: { state.setLabMetalRendering($0) }),
-                        // Compile-fix round 1 (item 19): KSPlayer
-                        // 2.3.4 provides no Metal rendering switch and
-                        // the system player has none either, so this
-                        // switch currently changes nothing; it is kept
-                        // for a future KSPlayer version that adds one.
-                        caption: state.localized("当前版本不起作用：KSPlayer 2.3.4 未提供 Metal 渲染开关，系统播放器也没有可调的开关。开关保留，待后续 KSPlayer 版本支持时再接通。")
+                        // Compile-fix round 2 (M-01): the switch is
+                        // real now — on selects KSPlayer's Metal
+                        // backend (KSMEPlayer), off keeps the
+                        // AVFoundation backend (KSAVPlayer). It only
+                        // affects the KS playback path; the pure
+                        // system-player path has no app-level Metal
+                        // switch and is unaffected. Toggling rebuilds
+                        // the player with the new backend.
+                        caption: state.localized("开：KS 播放改走 Metal 渲染后端；关：保持 AVFoundation 后端。只影响 KS 播放路径，纯系统播放器路径不受影响；切换后播放器会重建并改用新后端。")
                     )
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("实时字幕")).font(.headline)
