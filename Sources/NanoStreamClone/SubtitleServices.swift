@@ -312,7 +312,15 @@ enum TranslationService {
         // satisfy the macOS target (Translation needs macOS 15+);
         // list both platforms so the macOS build stays valid.
         guard #available(iOS 18.0, macOS 15.0, *) else { throw SubtitleServiceError.systemUnavailable }
-        #if canImport(Translation)
+        // Compile-fix round 1 (items 55-57): canImport alone does
+        // not gate this — Xcode 15.4's SDK already ships the
+        // Translation framework, but the programmatic
+        // TranslationSession type only exists from Xcode 16 /
+        // Swift 6. Gate on the compiler version so the old toolchain
+        // takes the systemUnavailable branch below; the system
+        // translation feature itself is untouched and stays live
+        // on Xcode 16+ builds.
+        #if compiler(>=6.0) && canImport(Translation)
         do {
             let configuration = TranslationSession.Configuration(
                 source: nil,

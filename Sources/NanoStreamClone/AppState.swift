@@ -229,8 +229,11 @@ final class AppState: ObservableObject {
     /// generation guard used to only discard a superseded parse's result
     /// while the parse itself ran to completion. Cancelling the handle
     /// (plus the checkpoint in parseReport) actually stops it early.
-    private var localChannelsParseTask: Task<[Channel], Never>?
-    private var localReportParseTask: Task<(channels: [Channel], skipped: Int), Never>?
+    // Compile-fix round 1 (items 1-2): M3UParser.parseReport returns
+    // a 3-tuple (channels, skipped, tvgURL); the task properties
+    // must carry the same tuple, otherwise the assignment fails.
+    private var localChannelsParseTask: Task<(channels: [Channel], skipped: Int, tvgURL: String?), Never>?
+    private var localReportParseTask: Task<(channels: [Channel], skipped: Int, tvgURL: String?), Never>?
     private var epgRefreshLoopTask: Task<Void, Never>?
     /// Generation guard for EPG loads: a manual reload, a timer tick and a
     /// previous load must never race, with the slower older result

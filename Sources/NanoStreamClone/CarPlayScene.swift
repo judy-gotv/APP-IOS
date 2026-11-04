@@ -207,23 +207,24 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 CPInformationItem(title: "视频", detail: "仅驻车且车辆支持车载视频时在车机显示；否则只播音频。"),
             ],
             actions: [
-                CPTextButton(title: "播放 / 暂停") { [weak self] _, completion in
-                    guard let player = self?.videoPlayer else { completion(); return }
+                // Compile-fix round 1 (items 3-11): CPTextButton's
+                // real API is init(title:textStyle:handler:) with a
+                // single-parameter handler (CPTextButton) -> Void —
+                // there is no completion callback to call.
+                CPTextButton(title: "播放 / 暂停", textStyle: .normal) { [weak self] _ in
+                    guard let player = self?.videoPlayer else { return }
                     if player.timeControlStatus == .playing {
                         player.pause()
                     } else {
                         player.play()
                     }
-                    completion()
                 },
-                CPTextButton(title: "返回频道列表") { [weak self] _, completion in
+                CPTextButton(title: "返回频道列表", textStyle: .normal) { [weak self] _ in
                     self?.interfaceController?.popTemplate(animated: true, completion: nil)
-                    completion()
                 },
-                CPTextButton(title: "切换为音频") { [weak self] _, completion in
+                CPTextButton(title: "切换为音频", textStyle: .normal) { [weak self] _ in
                     self?.stopVideo()
                     self?.play(channel)
-                    completion()
                 },
             ])
         interfaceController?.pushTemplate(page, animated: true, completion: nil)

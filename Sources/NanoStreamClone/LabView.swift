@@ -90,7 +90,12 @@ struct LabView: View {
                     labToggle(
                         title: state.localized("Metal 渲染"),
                         value: Binding(get: { state.labMetalRendering }, set: { state.setLabMetalRendering($0) }),
-                        caption: state.localized("仅 KSPlayer 生效，系统播放器不受影响。下次播放生效。可能更耗电，HDR 显示效果可能有差别。")
+                        // Compile-fix round 1 (item 19): KSPlayer
+                        // 2.3.4 provides no Metal rendering switch and
+                        // the system player has none either, so this
+                        // switch currently changes nothing; it is kept
+                        // for a future KSPlayer version that adds one.
+                        caption: state.localized("当前版本不起作用：KSPlayer 2.3.4 未提供 Metal 渲染开关，系统播放器也没有可调的开关。开关保留，待后续 KSPlayer 版本支持时再接通。")
                     )
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("实时字幕")).font(.headline)
@@ -160,8 +165,12 @@ struct TranslatedSubtitleOverlay: View {
             }
         }
         .onAppear { model.load(masterURL: masterURL) }
-        .onChange(of: masterURL) { model.reset(); model.load(masterURL: masterURL) }
-        .onChange(of: position) {
+        // Compile-fix round 1 (items 49-54): the zero-parameter
+        // closure resolves to the iOS 17-only onChange(of:initial:_:)
+        // overload; an explicit single parameter pins the iOS 14+
+        // overload, so the iOS 16 deployment target still builds.
+        .onChange(of: masterURL) { _ in model.reset(); model.load(masterURL: masterURL) }
+        .onChange(of: position) { _ in
             model.update(position: position, engine: state.translationEngine, target: state.translationTargetCode, apiBaseURL: state.translateAPIBaseURL, aiBaseURL: state.translateAIBaseURL, aiModel: state.translateAIModel, enabled: state.subtitleTranslationEnabled)
         }
         .onDisappear { model.reset() }
@@ -199,7 +208,7 @@ struct LiveSubtitleOverlay: View {
         .onAppear {
             model.start(masterURL: masterURL, engine: state.liveSubtitleEngine, apiBaseURL: state.liveSubAPIBaseURL, aiBaseURL: state.liveSubAIBaseURL, aiModel: state.liveSubAIModel)
         }
-        .onChange(of: state.liveSubtitleEngine) {
+        .onChange(of: state.liveSubtitleEngine) { _ in
             model.start(masterURL: masterURL, engine: state.liveSubtitleEngine, apiBaseURL: state.liveSubAPIBaseURL, aiBaseURL: state.liveSubAIBaseURL, aiModel: state.liveSubAIModel)
         }
         .onDisappear { model.stop() }
@@ -254,9 +263,9 @@ struct ListenTranslatedSubtitleOverlay: View {
             }
         }
         .onAppear { restart() }
-        .onChange(of: masterURL) { model.stop(); restart() }
-        .onChange(of: state.liveSubtitleEngine) { restart() }
-        .onChange(of: state.translationEngine) { restart() }
+        .onChange(of: masterURL) { _ in model.stop(); restart() }
+        .onChange(of: state.liveSubtitleEngine) { _ in restart() }
+        .onChange(of: state.translationEngine) { _ in restart() }
         .onDisappear { model.stop() }
     }
 }

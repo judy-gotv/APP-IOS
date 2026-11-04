@@ -47,8 +47,11 @@ final class DLNADiscovery: ObservableObject {
         }
         let group = NWConnectionGroup(with: multicast, using: parameters)
         self.group = group
-        group.setReceiveHandler(maximumMessageSize: 8192, rejectOversizedMessages: true) { [weak self] message, _, _ in
-            guard let self, let data = message, let text = String(data: data, encoding: .utf8) else { return }
+        // Compile-fix round 1 (item 48): the receive handler's first
+        // parameter is NWConnectionGroup.Message, not Data — the
+        // datagram bytes arrive as the second parameter.
+        group.setReceiveHandler(maximumMessageSize: 8192, rejectOversizedMessages: true) { [weak self] _, data, _ in
+            guard let self, let data, let text = String(data: data, encoding: .utf8) else { return }
             Task { @MainActor [weak self] in
                 await self?.handleResponse(text)
             }

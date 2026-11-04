@@ -275,7 +275,10 @@ struct HomeView: View {
                             Text(state.localized("正在刷新…")).font(.caption).foregroundStyle(.secondary)
                         }.padding(.top, 12)
                     }
-                    RecentRail(onShowAll: { showHistory = true }) { channel in state.play(channel); selectedDetail = channel }.padding(.top, 23)
+                    // Compile-fix round 1 (item 13): the trailing
+                    // closure binds to the last parameter (onShowAll),
+                    // not to onOpen — both labels must be explicit.
+                    RecentRail(onOpen: { channel in state.play(channel); selectedDetail = channel }, onShowAll: { showHistory = true }).padding(.top, 23)
                     if state.visibleChannels.isEmpty {
                         VStack(spacing: 8) {
                             Text(state.localized("暂无频道")).font(.title3.bold())
@@ -631,7 +634,7 @@ private struct PreviewPlayerLayerView: NSViewRepresentable {
         init(onReadyChange: ((Bool) -> Void)?) { self.onReadyChange = onReadyChange }
         func observe(layer: AVPlayerLayer) {
             observation?.invalidate()
-            observation = layer.observe(\.readyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            observation = layer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
                 let ready = layer.isReadyForDisplay
                 DispatchQueue.main.async { self?.onReadyChange?(ready) }
             }
@@ -680,7 +683,7 @@ private struct PreviewPlayerLayerView: UIViewRepresentable {
         init(onReadyChange: ((Bool) -> Void)?) { self.onReadyChange = onReadyChange }
         func observe(layer: AVPlayerLayer) {
             observation?.invalidate()
-            observation = layer.observe(\.readyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            observation = layer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
                 let ready = layer.isReadyForDisplay
                 DispatchQueue.main.async { self?.onReadyChange?(ready) }
             }
@@ -1705,11 +1708,10 @@ struct PlayerSurface: View {
     // Dev round 10 (D-01): lab Metal rendering switch, forwarded to
     // the KS view and, via the AV view, to its KS fallback (dev
     // round 12, R12-01; dev round 14, R14-01, closed the fallback
-    // passthrough and the AV declaration). The pure AV path ignores
-    // it: AVPlayerLayer is already Metal-backed by the system; there
-    // is no app-level switch to flip for it. The lab caption uses
-    // the KS-only table key, so the switch never promises AV
-    // behaviour.
+    // passthrough and the AV declaration). Compile-fix round 1
+    // (item 19): KSPlayer 2.3.4 has no such switch, so the KS view
+    // drops the assignment and the switch is a no-op everywhere
+    // for now; the lab caption says so.
     var metalRendering: Bool = false
     // Dev round 1: VOD/replay + engine-switch + source-switch plumbing.
     // Defaults keep every other call site unchanged.
@@ -1733,7 +1735,7 @@ struct PlayerSurface: View {
         // and the settings caption for the KS-only switches already
         // says they do not affect the system player.
         #if os(macOS)
-        AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: false, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, deinterlace: false, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, allowKSFallback: false, onVideoSize: onVideoSize)
+        AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: false, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, allowKSFallback: false, deinterlace: false, onVideoSize: onVideoSize)
         #else
         // Dev round 2 (R2-07): Auto and system player are no longer the
         // same view. Auto = AVPlayer first, KSPlayer fallback on failure
@@ -1745,9 +1747,9 @@ struct PlayerSurface: View {
         case .ksPlayer:
             KSCompactPlayerView(url: url, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, deinterlace: deinterlace, metalRendering: metalRendering, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, onVideoSize: onVideoSize)
         case .avPlayer:
-            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, deinterlace: deinterlace, metalRendering: metalRendering, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, allowKSFallback: false, onVideoSize: onVideoSize)
+            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, allowKSFallback: false, metalRendering: metalRendering, deinterlace: deinterlace, onVideoSize: onVideoSize)
         case .auto:
-            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, deinterlace: deinterlace, metalRendering: metalRendering, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, allowKSFallback: true, onVideoSize: onVideoSize)
+            AdaptiveAVPlayerView(url: url, title: title, bufferMilliseconds: bufferMilliseconds, allowsPictureInPicture: allowsPictureInPicture, hardwareAcceleration: hardwareAcceleration, automaticAudioSelection: automaticAudioSelection, showLatency: showLatency, streamInfo: $streamInfo, isLive: isLive, playbackPosition: playbackPosition, playbackDuration: playbackDuration, initialPosition: initialPosition, alternateURLs: alternateURLs, activeSourceURL: activeSourceURL, onSourceSelect: onSourceSelect, allowKSFallback: true, metalRendering: metalRendering, deinterlace: deinterlace, onVideoSize: onVideoSize)
         }
         #endif
     }
@@ -1908,13 +1910,12 @@ private struct KSCompactPlayerView: View {
     // KSOptions below. CI-verification item for the property
     // spelling, same precedent as textFont/userAgent.
     var deinterlace: Bool = false
-    // Dev round 10 (D-01): lab Metal rendering switch, applied to
-    // the KS fallback's KSOptions below (dev round 12, R12-01: the
-    // pure AV path ignores it). CI-verification item for the property
-    // spelling, same precedent as textFont/userAgent/deinterlace:
-    // if KSPlayer 2.3.4 has no such property, CI fails here first
-    // and the fix is to drop the line (the switch then degrades to
-    // a no-op, and the lab caption must say so).
+    // Dev round 10 (D-01): lab Metal rendering switch.
+    // Compile-fix round 1 (item 19): verified against the KSPlayer
+    // 2.3.4 source — KSOptions has no Metal switch, so the options
+    // assignment was dropped and the switch degrades to a no-op
+    // (the lab caption says so); the property stays so the
+    // PlayerSurface call shape is unchanged.
     var metalRendering: Bool = false
     // Dev round 1: VOD/replay + engine-switch + source-switch plumbing.
     // Defaults keep the AV-fallback call site unchanged.
@@ -2014,11 +2015,11 @@ private struct KSCompactPlayerView: View {
                         // after a rebuild (a new player starts at
                         // defaults), and apply a pending engine-switch
                         // seek for VOD.
-                        layer.player.volume = Float(ksVolume)
+                        layer.player.playbackVolume = Float(ksVolume)
                         if !isLive { layer.player.playbackRate = Float(ksPlaybackRate) }
                         if initialPosition > 0 && !didApplyInitialSeek {
                             didApplyInitialSeek = true
-                            layer.player.seek(time: initialPosition)
+                            layer.player.seek(time: initialPosition, completion: { _ in })
                         }
                     }
                 }
@@ -2222,17 +2223,27 @@ private struct KSCompactPlayerView: View {
         options.registerRemoteControll = true
         // Dev round 2 (R2-02/R2-10): subtitle size from the slider and
         // the user's custom UA (same "..." means unset rule as
-        // M3UParser.configuredSession). CI-verification item: these two
-        // property spellings on KSPlayer 2.3.4's KSOptions.
-        options.textFont = UIFont.systemFont(ofSize: subtitleFontSize)
+        // M3UParser.configuredSession).
+        // Compile-fix round 1 (item 17): KSPlayer 2.3.4's KSOptions
+        // has no textFont — subtitle font size lives on the shared
+        // KSSubtitle.textFontSize (CGFloat), so the slider value is
+        // applied there instead of on the per-item options.
+        KSSubtitle.textFontSize = CGFloat(subtitleFontSize)
         options.userAgent = PlaybackItemFactory.effectiveUserAgent()
-        // Dev round 8 (R8-09): CI-verification item — deinterlace on
-        // KSPlayer 2.3.4's KSOptions, same precedent as the two lines
-        // above. AVPlayer has no equivalent switch (system default).
-        options.deinterlace = deinterlace
-        // Dev round 10 (D-01): lab Metal rendering (see the property
-        // note above for the CI-verification caveat).
-        options.metalRendering = metalRendering
+        // Compile-fix round 1 (item 18): KSPlayer 2.3.4's KSOptions
+        // spells the deinterlace switch autoDeInterlace. AVPlayer
+        // has no equivalent switch (system default).
+        options.autoDeInterlace = deinterlace
+        // Compile-fix round 1 (item 19): KSPlayer 2.3.4's KSOptions
+        // has no metalRendering switch at all (verified against the
+        // 2.3.4 source: no Metal option exists), so the assignment
+        // is dropped — the lab switch is retained in settings but
+        // degrades to a no-op, and the lab caption now says so.
+        // (The AV path already ignored it; AVPlayerLayer is
+        // Metal-backed by the system with no app-level switch.)
+        // metalRendering is intentionally not read here: the switch
+        // stays in settings for a future KSPlayer version that adds
+        // such an option, but today it changes nothing.
         return options
     }
 
@@ -2263,8 +2274,8 @@ private struct KSCompactPlayerView: View {
         // are re-applied on readyToPlay below.
         ksPosition = 0
         ksDuration = 0
-        playbackPosition = 0
-        playbackDuration = 0
+        playbackPosition.wrappedValue = 0
+        playbackDuration.wrappedValue = 0
         subtitleOptions = []
         subtitleSelectedIndex = nil
         didApplyInitialSeek = false
@@ -2401,22 +2412,22 @@ private struct KSCompactPlayerView: View {
         guard let player = coordinator.playerLayer?.player else { return }
         ksPosition = player.currentPlaybackTime
         ksDuration = player.duration
-        playbackPosition = ksPosition
-        playbackDuration = ksDuration
+        playbackPosition.wrappedValue = ksPosition
+        playbackDuration.wrappedValue = ksDuration
     }
 
     /// Dev round 1 (DEV-GESTURE/DEV-PROGRESS/DEV-ENGINESWITCH): KSPlayer
     /// seek. CI-verification item: the seek API spelling on KSPlayer
     /// 2.3.4 (see report).
     private func seekKS(to seconds: Double) {
-        coordinator.playerLayer?.player.seek(time: seconds)
+        coordinator.playerLayer?.player.seek(time: seconds, completion: { _ in })
     }
 
     /// Dev round 1 (DEV-VOLUME): KSPlayer volume. CI-verification
     /// item: the volume property spelling on KSPlayer 2.3.4.
     private func applyKSVolume(_ value: Double) {
         ksVolume = value
-        coordinator.playerLayer?.player.volume = Float(value)
+        coordinator.playerLayer?.player.playbackVolume = Float(value)
         revealControls()
     }
 
@@ -2493,9 +2504,9 @@ private struct AdaptiveAVPlayerView: View {
     // the AV path itself has no deinterlace switch.
     var deinterlace: Bool = false
     // Dev round 14 (R14-01): lab Metal rendering switch, declared so
-    // PlayerSurface's AV calls compile (the AV path itself ignores
-    // it — AVPlayerLayer is already Metal-backed by the system — and
-    // it is only forwarded to the KS fallback view below).
+    // PlayerSurface's AV calls compile. Compile-fix round 1
+    // (item 19): KSPlayer 2.3.4 has no such switch either, so the
+    // fallback view also drops it and the switch is a no-op.
     var metalRendering: Bool = false
     // Dev round 1: same VOD/engine/source plumbing as the KS view.
     // Defaults keep the PlayerSurface call shape simple.
@@ -2667,8 +2678,8 @@ private struct AdaptiveAVPlayerView: View {
         // Dev round 6 (R6-09): forward the session's real frame size
         // to the probe record; .zero is filtered by the recorder.
         .onReceive(session.$videoSize) { size in if size.width > 0 && size.height > 0 { onVideoSize?(size) } }
-        .onReceive(session.$playbackPosition) { playbackPosition = $0 }
-        .onReceive(session.$playbackDuration) { playbackDuration = $0 }
+        .onReceive(session.$playbackPosition) { playbackPosition.wrappedValue = $0 }
+        .onReceive(session.$playbackDuration) { playbackDuration.wrappedValue = $0 }
         // Dev round 2 (R2-02): a slider change mid-playback re-applies
         // the size to the current item; creation and retry apply the
         // stored value inside the session.
@@ -2680,7 +2691,10 @@ private struct AdaptiveAVPlayerView: View {
         // (plain item, no proxy loader, no custom UA). Auto already
         // has its own KS fallback and is deliberately untouched, so
         // the two mechanisms can never be confused.
-        .onChange(of: session.didFail) {
+        // Compile-fix round 1 (same class as items 49-54): an
+        // explicit single parameter pins the iOS 14+ onChange
+        // overload instead of the iOS 17-only one.
+        .onChange(of: session.didFail) { _ in
             if session.didFail && !allowKSFallback && state.labEnhancedSystemPlayer && !enhancedRetried {
                 enhancedRetried = true
                 session.retryWithCompatItem()
@@ -2843,9 +2857,14 @@ private final class PlayerLayerHostView: UIView {
 }
 #endif
 
-@MainActor
 /// Dev round 2 (R2-09/R2-10): one place that builds system-player
 /// items with the user's proxy/UA settings applied. Rules:
+// Compile-fix round 1 (items 37-43): the @MainActor annotation is
+// dropped — the factory touches no main-actor state (UserDefaults
+// reads, AVPlayerItem construction, a resource-loader delegate), and
+// its callers include the nonisolated AVPlaybackSession, whose
+// synchronous init/retry methods cannot await an isolated call.
+// Callers that already run on the main actor are unaffected.
 /// - A configured HTTP proxy (parseable by M3UParser.parseProxy) routes
 ///   playback through a custom-scheme resource loader (nanohttp/
 ///   nanohttps) whose requests run on a session built from
@@ -2903,7 +2922,11 @@ enum PlaybackItemFactory {
         }
         let customUA = (UserDefaults.standard.string(forKey: "userAgent") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !customUA.isEmpty && !customUA.contains("...") {
-            let asset = AVURLAsset(url: url, options: [AVURLAssetHTTPHeaderFieldsKey: ["User-Agent": customUA]])
+            // Compile-fix round 1 (item 34): CI reports
+            // AVURLAssetHTTPHeaderFieldsKey as out of scope under
+            // Xcode 15.4, so the documented key string is used
+            // literally — AVURLAsset reads the same string key.
+            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": customUA]])
             let item = AVPlayerItem(asset: asset)
             item.preferredPeakBitRate = cap
             return (item, nil)
@@ -2921,7 +2944,11 @@ enum PlaybackItemFactory {
     /// not numerically identical — both honour the same slider value.
     static func subtitleTextStyleRules(sizePoints: Double) -> [AVTextStyleRule] {
         let percent = max(min(sizePoints / 18 * 100, 222), 67)
-        return [AVTextStyleRule(textMarkupAttributes: [kCMTextMarkupAttribute_RelativeFontSize as String: NSNumber(value: percent)])]
+        // Compile-fix round 1 (item 35): AVTextStyleRule's
+        // textMarkupAttributes initializer is failable — an
+        // invalid attribute set yields nil, not a rule.
+        guard let rule = AVTextStyleRule(textMarkupAttributes: [kCMTextMarkupAttribute_RelativeFontSize as String: NSNumber(value: percent)]) else { return [] }
+        return [rule]
     }
 }
 
@@ -2977,7 +3004,10 @@ final class PlaybackResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDeleg
             if dataRequest.requestsAllDataToEndOfResource {
                 if requestedOffset > 0 { urlRequest.setValue("bytes=\(requestedOffset)-", forHTTPHeaderField: "Range") }
             } else {
-                let end = requestedOffset + dataRequest.requestedLength - 1
+                // Compile-fix round 1 (item 36): requestedOffset is
+                // Int64 while requestedLength is Int — convert
+                // explicitly instead of mixing the two widths.
+                let end = requestedOffset + Int64(dataRequest.requestedLength) - 1
                 urlRequest.setValue("bytes=\(requestedOffset)-\(end)", forHTTPHeaderField: "Range")
             }
         }
@@ -3107,7 +3137,9 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
     private var resourceLoaderDelegate: PlaybackResourceLoaderDelegate?
     // Dev round 2 (R2-02): last subtitle size applied, so a retry
     // rebuilds the item at the same size without re-reading defaults.
-    private var subtitleSizePoints: Double = Self.storedSubtitleSize()
+    // Compile-fix round 1 (item 12): a stored-property initializer
+    // may not reference Self — the value is assigned in init below.
+    private var subtitleSizePoints: Double
     // Dev round 1: legible subtitle group snapshot (DEV-SUBTRACK),
     // periodic position observer token (DEV-PROGRESS) and one-shot
     // engine-switch seek (DEV-ENGINESWITCH).
@@ -3121,6 +3153,7 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
         self.sourceURL = url
         self.bufferSeconds = max(bufferMilliseconds / 1000, 0)
         self.initialSeek = initialSeek
+        self.subtitleSizePoints = Self.storedSubtitleSize()
         // Dev round 2 (R2-09/R2-10/R2-02): proxy/UA applied via the
         // factory (plain item when neither is set); subtitle size
         // applied at creation and on every retry/change.
@@ -3612,9 +3645,14 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
                 }
                 var unique: [String] = []
                 for value in ["自动"] + names where !unique.contains(value) { unique.append(value) }
+                // Compile-fix round 1 (items 44-46): a captured var
+                // may not be read from concurrently-executing code —
+                // freeze it into a let before crossing to MainActor.
+                let resolvedOptions = unique.count > 1 ? unique : []
+                let resolvedIndex = unique.count > 1 ? 0 : nil
                 await MainActor.run {
-                    self.videoOptions = unique.count > 1 ? unique : []
-                    self.videoSelectedIndex = unique.count > 1 ? 0 : nil
+                    self.videoOptions = resolvedOptions
+                    self.videoSelectedIndex = resolvedIndex
                 }
             } else {
                 await MainActor.run { self.videoOptions = []; self.videoSelectedIndex = nil }
@@ -3668,7 +3706,10 @@ private final class AVPlaybackSession: NSObject, ObservableObject {
                     let descriptions = try await audio.load(.formatDescriptions)
                     if let codec = Self.codecName(for: descriptions) { lines.append("Audio codec  \(codec)") }
                 }
-                await MainActor.run { self.streamInfo = lines.joined(separator: "\n") }
+                // Compile-fix round 1 (item 47): same captured-var
+                // rule as above — freeze the joined text first.
+                let joinedInfo = lines.joined(separator: "\n")
+                await MainActor.run { self.streamInfo = joinedInfo }
             } catch {
                 // Round-3 fix (D01): the fallback sentence used to be a
                 // hardcoded English string in every language. The system
