@@ -21,6 +21,11 @@ struct ContentView: View {
     // HomeView's @State, so switching tabs rebuilt HomeView and silently
     // collapsed the menu. It now lives here, above the tab switch.
     @State private var homeShowGroups = false
+    // Dev round 21 (S-01): true while the settings hub has a pushed
+    // sub-page. SettingsView drives this binding from its navigation
+    // path, and the tab host hides the floating BottomBar while it is
+    // true, so the bar can never cover a sub-page's back gesture.
+    @State private var settingsNavActive = false
 
     var body: some View {
         ZStack {
@@ -31,11 +36,13 @@ struct ContentView: View {
                 case .favorites: FavoritesView()
                 case .playlists: PlaylistsView(showAdd: $showAddPlaylist)
                 case .guide: EPGOverviewView()
-                case .settings: SettingsView()
+                case .settings: SettingsView(navActive: $settingsNavActive)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            VStack { Spacer(); BottomBar(tab: $tab) }
+            if !settingsNavActive {
+                VStack { Spacer(); BottomBar(tab: $tab) }
+            }
         }
         .preferredColorScheme(state.colorScheme)
         .tint(state.accent)
@@ -278,7 +285,7 @@ struct HomeView: View {
                     // Compile-fix round 1 (item 13): the trailing
                     // closure binds to the last parameter (onShowAll),
                     // not to onOpen — both labels must be explicit.
-                    RecentRail(onOpen: { channel in state.play(channel); selectedDetail = channel }, onShowAll: { showHistory = true }).padding(.top, 23)
+                    RecentRail(onOpen: { channel in Task { await state.play(channel); selectedDetail = channel } }, onShowAll: { showHistory = true }).padding(.top, 23)
                     if state.visibleChannels.isEmpty {
                         VStack(spacing: 8) {
                             Text(state.localized("暂无频道")).font(.title3.bold())
@@ -291,16 +298,25 @@ struct HomeView: View {
                     // detail list (see ChannelRow).
                     if state.gridLayout == .list {
                         LazyVStack(spacing: 10) {
-                            ForEach(state.visibleChannels) { channel in ChannelRow(channel: channel) { state.play(channel); selectedDetail = channel } }
+                            ForEach(state.visibleChannels) { channel in ChannelRow(channel: channel) { Task { await state.play(channel); selectedDetail = channel } } }
                         }.padding(.horizontal, 22).padding(.top, 17).padding(.bottom, 110)
                     } else {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: effectiveColumns), spacing: 12) {
-                            ForEach(state.visibleChannels) { channel in ChannelCard(channel: channel, compact: state.gridLayout == .fourColumns) { state.play(channel); selectedDetail = channel } }
+                            ForEach(state.visibleChannels) { channel in ChannelCard(channel: channel, compact: state.gridLayout == .fourColumns) { Task { await state.play(channel); selectedDetail = channel } } }
                         }.padding(.horizontal, 22).padding(.top, 17).padding(.bottom, 110)
                     }
                 }
             }
+            // Dev round 21 (C-01): report the content's scroll offset
+            // to the preview gate. The top of the VStack moves 1:1
+            // with scrolling, so this only fires on real scrolls (and
+            // once on first layout), never on plain re-renders.
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: HomeScrollOffsetKey.self, value: geo.frame(in: .named("homeScrollSpace")).minY)
+            })
         }
+        .coordinateSpace(name: "homeScrollSpace")
+        .onPreferenceChange(HomeScrollOffsetKey.self) { _ in PreviewScrollGate.shared.noteScrollActivity() }
         .fullScreenCover(item: $selectedDetail) { channel in ChannelDetailView(channel: channel) }
         .sheet(isPresented: $showHistory) { HistoryView() }
         .onReceive(NotificationCenter.default.publisher(for: M3UParser.proxyMigrationFailedChanged)) { _ in
@@ -358,6 +374,38 @@ struct RecentRail: View {
 }
 
 @MainActor
+/// Dev round 21 (C-01): scroll-idle gate for home card previews.
+/// HomeView reports every scroll-offset change here; the gate stays
+/// busy while scrolling and turns idle 0.7s after the last change.
+/// LivePreviewView only starts decoding once the gate is idle, so a
+/// fresh subscription no longer fires a burst of decodes the moment
+/// its cards appear, and fast scrolling no longer churns slots.
+/// The gate starts idle, so pages that never report scrolling
+/// (detail rows) behave exactly as before. All calls happen on the
+/// main thread (onPreferenceChange), so no locking is needed.
+private final class PreviewScrollGate: ObservableObject {
+    static let shared = PreviewScrollGate()
+    @Published private(set) var isIdle = true
+    private var timer: Timer?
+
+    func noteScrollActivity() {
+        if isIdle { isIdle = false }
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { [weak self] in
+            self?.isIdle = true
+        }
+    }
+}
+
+/// Preference key carrying the home content's scroll offset (the top
+/// of the home VStack in scroll coordinates). It only changes when
+/// the user actually scrolls, so reporting it never fires spuriously
+/// on plain re-renders.
+private struct HomeScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 private final class PreviewSessionPool {
     static let shared = PreviewSessionPool()
     /// Posted when a slot is fully freed, so a pool-full card can retry
@@ -365,7 +413,7 @@ private final class PreviewSessionPool {
     static let didReleaseNotification = Notification.Name("NanoStreamClone.PreviewPoolDidRelease")
     // Dev round 6 (R6-07): the limit is no longer hardcoded — it reads
     // the adjustable setting live (unset key reads 0, meaning the
-    // default 4), clamped 1...8 like the settings Stepper.
+    // default 2, round 21 was 4), clamped 1...8 like the settings Stepper.
     private var limit: Int { AppState.clampedPreviewLimit(UserDefaults.standard.integer(forKey: "nanostream.previewLimit")) }
     // Reference-counted: two cards for the same channel id (duplicate
     // entries) must not release each other's slot.
@@ -498,6 +546,12 @@ private struct LivePreviewView: View {
     var onLatencyChange: ((LatencyDisplay) -> Void)? = nil
     @StateObject private var model: PreviewPlayerModel
     @State private var acquired = false
+    // Dev round 21 (C-01): scroll-idle gate (see PreviewScrollGate).
+    // A card that appears while the home grid is scrolling waits for
+    // the scroll to settle instead of decoding immediately; the
+    // explicit retry tap below stays immediate (a deliberate action).
+    @ObservedObject private var scrollGate = PreviewScrollGate.shared
+    @State private var pendingIdleStart = false
     // Dev round 6 (R6-08): true once the layer reports its first
     // frame; the logo placeholder underneath hides at that point.
     @State private var firstFrameReady = false
@@ -506,6 +560,18 @@ private struct LivePreviewView: View {
         self.channel = channel
         self.onLatencyChange = onLatencyChange
         _model = StateObject(wrappedValue: PreviewPlayerModel(url: channel.streamURL))
+    }
+
+    /// Dev round 21 (C-01): acquire a pool slot and start decoding,
+    /// but only once the home scroll gate is idle. While scrolling,
+    /// the card waits (pendingIdleStart) instead of decoding; the
+    /// idle onChange above fires the deferred start. Pages that never
+    /// report scrolling leave the gate idle, so they start at once.
+    private func requestStart() {
+        guard !acquired else { return }
+        guard scrollGate.isIdle else { pendingIdleStart = true; return }
+        acquired = PreviewSessionPool.shared.acquire(channel.id)
+        if acquired { model.start() }
     }
 
     // Dev round 6 (R6-08): placeholder shown until the first frame:
@@ -568,11 +634,18 @@ private struct LivePreviewView: View {
             // Dev round 6 (R6-08): a re-appearing card starts from the
             // placeholder again, not from a stale ready flag.
             firstFrameReady = false
-            acquired = PreviewSessionPool.shared.acquire(channel.id)
-            if acquired { model.start() }
+            requestStart()
         }
         .onDisappear {
+            pendingIdleStart = false
             if acquired { model.stop(); PreviewSessionPool.shared.release(channel.id); acquired = false; firstFrameReady = false }
+        }
+        .onChange(of: scrollGate.isIdle) { idle in
+            // Dev round 21 (C-01): a card that appeared mid-scroll
+            // starts now that scrolling has settled.
+            guard idle, pendingIdleStart else { return }
+            pendingIdleStart = false
+            requestStart()
         }
         .onReceive(NotificationCenter.default.publisher(for: PreviewSessionPool.didReleaseNotification)) { _ in
             // Round-4 fix (B03): a slot freed while backgrounded used to
@@ -589,8 +662,7 @@ private struct LivePreviewView: View {
             // every return to the foreground, and the retry tap remains
             // available meanwhile.
             guard !acquired, scenePhase == .active else { return }
-            acquired = PreviewSessionPool.shared.acquire(channel.id)
-            if acquired { model.start() }
+            requestStart()
         }
         .onChange(of: scenePhase) { phase in
             // Round-3 fix (A01): leaving the app does not trigger
@@ -600,8 +672,7 @@ private struct LivePreviewView: View {
             if phase == .background, acquired {
                 model.stop(); PreviewSessionPool.shared.release(channel.id); acquired = false
             } else if phase == .active, !acquired {
-                acquired = PreviewSessionPool.shared.acquire(channel.id)
-                if acquired { model.start() }
+                requestStart()
             }
         }
     }
@@ -897,7 +968,7 @@ struct ChannelCard: View {
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { onOpen() }
                 .onTapGesture { onOpen() }
-            Button { state.toggleFavorite(channel) } label: {
+            Button { Task { await state.toggleFavorite(channel) } } label: {
                 Image(systemName: state.isFavorite(channel) ? "star.fill" : "star").foregroundStyle(.primary).frame(width: 36, height: 36)
             }.buttonStyle(.plain).padding(10)
         }
@@ -937,7 +1008,7 @@ struct ChannelRow: View {
                 if let program = state.currentProgram(for: channel) { Text(program.title).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
             }
             Spacer()
-            Button { state.toggleFavorite(channel) } label: {
+            Button { Task { await state.toggleFavorite(channel) } } label: {
                 Image(systemName: state.isFavorite(channel) ? "star.fill" : "star").foregroundStyle(.primary).frame(width: 36, height: 36)
             }.buttonStyle(.plain)
         }.padding(10).background(Color.card, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(state.accent.opacity(0.25), lineWidth: 1)).contentShape(Rectangle()).onTapGesture { onOpen() }
@@ -1058,7 +1129,7 @@ struct ChannelDetailView: View {
                             DLNADeviceSheet(cast: dlnaCast, url: playbackURL)
                         }
                     #endif
-                    Button { state.toggleFavorite(activeChannel) } label: { Image(systemName: state.isFavorite(activeChannel) ? "star.fill" : "star").font(.title3).frame(width: 44, height: 44) }.buttonStyle(.plain)
+                    Button { Task { await state.toggleFavorite(activeChannel) } } label: { Image(systemName: state.isFavorite(activeChannel) ? "star.fill" : "star").font(.title3).frame(width: 44, height: 44) }.buttonStyle(.plain)
                 }.padding(.horizontal, 18).padding(.top, 8)
                 if let program = replayProgram {
                     Text("\(state.localized("正在回看")) · \(program.title)").font(.caption).foregroundStyle(state.accent).padding(.horizontal, 18).padding(.top, 4)
@@ -1234,7 +1305,7 @@ struct ChannelDetailView: View {
         }
         .onAppear {
             if engineOverride == nil { engineOverride = state.preferredPlayer }
-            if state.selectedChannel?.id != activeChannel.id { state.play(activeChannel) }
+            if state.selectedChannel?.id != activeChannel.id { Task { await state.play(activeChannel) } }
         }
         .onDisappear { recordProgress() }
         .onChange(of: state.channels) { newChannels in
@@ -1248,7 +1319,7 @@ struct ChannelDetailView: View {
                 // never briefly shows the old channel's codec/bitrate.
                 streamInfo = ""
                 replayURL = nil; replayProgram = nil; sourceOverride = nil; playbackPosition = 0; playbackDuration = 0; engineSwitchSeek = 0
-                state.play(first)
+                Task { await state.play(first) }
             }
         }
         .alert(state.localized("编码信息"), isPresented: $showInfo) { Button(state.localized("关闭"), role: .cancel) {} } message: { Text(streamInfo.isEmpty ? state.localized("暂无数据") : streamInfo) }
@@ -1351,7 +1422,7 @@ struct ChannelDetailView: View {
         // preselect result; the .task for the new key resolves fresh.
         preselectedURL = nil
         preselectedForKey = nil
-        state.play(channel)
+        Task { await state.play(channel) }
     }
 
     private func switchEngine(_ engine: PreferredPlayer) {
@@ -1381,7 +1452,7 @@ struct ChannelDetailView: View {
         let now = Date()
         if program.start <= now && now < program.end {
             replayURL = nil; replayProgram = nil; sourceOverride = nil; playbackPosition = 0; playbackDuration = 0; engineSwitchSeek = 0
-            state.play(activeChannel)
+            Task { await state.play(activeChannel) }
         } else if program.end <= now {
             if let url = activeChannel.replayURL(for: program) {
                 // Dev round 10 (D-01): lab PLTV -> TVOD rewrite, only
@@ -3920,8 +3991,7 @@ struct FavoritesView: View {
                                 // is already gone and must not be
                                 // re-removed.
                                 let live = Set(state.favoriteChannels.map(\.id))
-                                state.removeFavorites(selection.intersection(live))
-                                selection.removeAll()
+                                Task { await state.removeFavorites(selection.intersection(live)); selection.removeAll() }
                             }
                             Button(state.localized("关闭"), role: .cancel) {}
                         } message: { Text(state.localized("确定删除所选收藏吗？该操作无法撤销。")) }
@@ -3938,7 +4008,7 @@ struct FavoritesView: View {
                                     if isEditing {
                                         if selection.contains(channel.id) { selection.remove(channel.id) } else { selection.insert(channel.id) }
                                     } else {
-                                        state.play(channel); selectedDetail = channel
+                                        Task { await state.play(channel); selectedDetail = channel }
                                     }
                                 }
                             }
@@ -4055,7 +4125,7 @@ struct HistoryView: View {
                     List {
                         ForEach(entries, id: \.channelID) { entry in
                             if let channel = state.channel(for: entry.channelID) {
-                                Button { state.play(channel); dismiss() } label: {
+                                Button { Task { await state.play(channel); dismiss() } } label: {
                                     HStack(spacing: 12) {
                                         ZStack {
                                             RoundedRectangle(cornerRadius: 8).fill(Color.black).frame(width: 64, height: 48)
@@ -4079,7 +4149,7 @@ struct HistoryView: View {
                             }
                         }
                         .onDelete { offsets in
-                            for index in offsets { state.removeHistoryEntry(channelID: entries[index].channelID) }
+                            Task { for index in offsets { await state.removeHistoryEntry(channelID: entries[index].channelID) } }
                         }
                     }
                 }
@@ -4168,93 +4238,129 @@ struct PlaylistsView: View {
 // reported instead of silently dropped.
 struct ConfigCenterView: View {
     @EnvironmentObject private var state: AppState
-    @Environment(\.dismiss) private var dismiss
     @State private var showAdd = false
     @State private var editingPlaylist: Playlist?
     @State private var deleteTarget: Playlist?
     @State private var exportURL: URL?
+    @State private var exportDate: Date?
     @State private var showImporter = false
     @State private var importMessage: String?
     @State private var showImportAlert = false
+    // Dev round 21 (S-09): playlist search text; the field only
+    // appears once there are more than 5 playlists.
+    @State private var playlistSearch = ""
+
+    // Playlists filtered by the search field (name match only); the
+    // unfiltered order is the playlist page order.
+    private var visiblePlaylists: [Playlist] {
+        let query = playlistSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return state.playlists }
+        return state.playlists.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
 
     var body: some View {
-        NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(state.localized("配置中心")).font(.system(size: 24, weight: .bold)).padding(.top, 8)
-                    Text(state.localized("密码不会随配置导出，导入后需重新填写。")).font(.caption).foregroundStyle(.secondary)
-                    // Playlists, in the same order as the playlist page.
-                    ForEach(Array(state.playlists.enumerated()), id: \.element.id) { index, playlist in
-                        HStack(spacing: 10) {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                // Dev round 21 (S-07/S-08/S-09): playlist section in
+                // the shared SettingsSection card language. A row
+                // shows only name, count · type, status and the enable
+                // switch; edit opens on tap, sort/delete live in the
+                // long-press menu (swipe actions need a List, and this
+                // page is a ScrollView — the menu carries what the
+                // checklist's swipe alternative would have).
+                SettingsSection(title: "\(state.localized("播放列表"))（\(state.playlists.count)）", icon: "rectangle.stack") {
+                    if state.playlists.isEmpty {
+                        // Dev round 21 (S-09): empty state.
+                        Text(state.localized("还没有播放列表，先添加一个订阅吧。")).font(.subheadline).foregroundStyle(.secondary)
+                        Button { showAdd = true } label: {
+                            Label(state.localized("添加播放列表"), systemImage: "plus")
+                                .frame(maxWidth: .infinity).frame(height: 50)
+                        }.buttonStyle(.borderedProminent).tint(state.accent)
+                    } else {
+                        if state.playlists.count > 5 {
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                                TextField(state.localized("搜索播放列表"), text: $playlistSearch).textFieldStyle(.plain)
+                            }.padding(12).background(Color.cardInner, in: RoundedRectangle(cornerRadius: 9)).overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.12)))
+                        }
+                        ForEach(visiblePlaylists) { playlist in
+                            let realIndex = state.playlists.firstIndex(where: { $0.id == playlist.id }) ?? 0
+                            ConfigPlaylistRow(
+                                playlist: playlist,
+                                isFirst: realIndex == 0,
+                                isLast: realIndex == state.playlists.count - 1,
+                                onEdit: { editingPlaylist = playlist },
+                                onDelete: { deleteTarget = playlist },
+                                onMoveUp: { state.movePlaylist(from: realIndex, to: realIndex - 1) },
+                                onMoveDown: { state.movePlaylist(from: realIndex, to: realIndex + 1) }
+                            )
+                        }
+                        Button { showAdd = true } label: { Label(state.localized("添加播放列表"), systemImage: "plus") }.buttonStyle(.bordered).tint(state.accent)
+                    }
+                }
+                // Dev round 21 (S-07/S-10): group section, same card
+                // language. Each row shows its channel count; show/hide
+                // is a switch now, not a text button. Group reorder
+                // chevrons stay (S-10 does not relocate them).
+                SettingsSection(title: "\(state.localized("分组管理"))（\(state.manageableGroups.count)）", icon: "folder") {
+                    if state.manageableGroups.isEmpty {
+                        Text(state.localized("暂无频道")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(state.manageableGroups.enumerated()), id: \.element) { index, group in
+                        HStack {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(playlist.name).font(.headline).lineLimit(1)
-                                Text("\(playlist.channelCount) \(state.localized("频道")) · \(playlist.kind.rawValue)").font(.caption).foregroundStyle(.secondary)
-                                PlaylistStatusText(playlist: playlist)
+                                Text(state.localizedGroup(group)).font(.subheadline)
+                                Text("\(state.allChannels.filter { $0.group == group }.count) \(state.localized("频道"))").font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Toggle(isOn: Binding(get: { playlist.isEnabled }, set: { state.setPlaylistEnabled(playlist, $0) })) {
-                                Text(state.localized("启用")).font(.caption).foregroundStyle(.secondary)
-                            }.labelsHidden().tint(state.accent)
                             VStack(spacing: 2) {
-                                Button { state.movePlaylist(from: index, to: index - 1) } label: { Image(systemName: "chevron.up").font(.caption) }.buttonStyle(.plain).disabled(index == 0)
-                                Button { state.movePlaylist(from: index, to: index + 1) } label: { Image(systemName: "chevron.down").font(.caption) }.buttonStyle(.plain).disabled(index == state.playlists.count - 1)
+                                Button {
+                                    var order = state.manageableGroups
+                                    order.remove(at: index); order.insert(group, at: index - 1)
+                                    state.setGroupOrder(order)
+                                } label: { Image(systemName: "chevron.up").font(.caption) }.buttonStyle(.plain).disabled(index == 0)
+                                Button {
+                                    var order = state.manageableGroups
+                                    order.remove(at: index); order.insert(group, at: index + 1)
+                                    state.setGroupOrder(order)
+                                } label: { Image(systemName: "chevron.down").font(.caption) }.buttonStyle(.plain).disabled(index == state.manageableGroups.count - 1)
                             }.foregroundStyle(state.accent)
-                            Button { editingPlaylist = playlist } label: { Image(systemName: "pencil").foregroundStyle(state.accent) }.buttonStyle(.plain)
-                            Button { deleteTarget = playlist } label: { Image(systemName: "trash").foregroundStyle(.red) }.buttonStyle(.plain)
-                        }.padding(14).background(Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16)
+                            Toggle(isOn: Binding(get: { !state.hiddenGroups.contains(group) }, set: { state.setGroupHidden(group, !$0) })) {
+                                Text(state.localized("显示")).font(.caption).foregroundStyle(.secondary)
+                            }.labelsHidden().tint(state.accent)
+                        }.frame(minHeight: 44)
                     }
-                    Button { showAdd = true } label: { Label(state.localized("添加播放列表"), systemImage: "plus") }.buttonStyle(.bordered).tint(state.accent).padding(.horizontal, 16)
-                    // Group management (R8-07): hide only affects home
-                    // display; order persists. Hidden groups stay listed
-                    // here so they can be shown again.
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(state.localized("分组管理")).font(.headline)
-                        if state.manageableGroups.isEmpty {
-                            Text(state.localized("暂无频道")).font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(Array(state.manageableGroups.enumerated()), id: \.element) { index, group in
-                            HStack {
-                                Text(state.localizedGroup(group)).font(.subheadline)
-                                Spacer()
-                                VStack(spacing: 2) {
-                                    Button {
-                                        var order = state.manageableGroups
-                                        order.remove(at: index); order.insert(group, at: index - 1)
-                                        state.setGroupOrder(order)
-                                    } label: { Image(systemName: "chevron.up").font(.caption) }.buttonStyle(.plain).disabled(index == 0)
-                                    Button {
-                                        var order = state.manageableGroups
-                                        order.remove(at: index); order.insert(group, at: index + 1)
-                                        state.setGroupOrder(order)
-                                    } label: { Image(systemName: "chevron.down").font(.caption) }.buttonStyle(.plain).disabled(index == state.manageableGroups.count - 1)
-                                }.foregroundStyle(state.accent)
-                                Button(state.localized(state.hiddenGroups.contains(group) ? "显示" : "隐藏")) {
-                                    state.setGroupHidden(group, !state.hiddenGroups.contains(group))
-                                }.buttonStyle(.bordered).tint(state.accent)
+                }
+                // Dev round 21 (S-07/S-11): import/export, same card
+                // language. The card states up front what an export
+                // contains and what to do after an import; the share
+                // button is always present (disabled until an export
+                // exists) and a successful export stamps its file name
+                // and time.
+                SettingsSection(title: state.localized("导入与导出"), icon: "square.and.arrow.up.arrow.down") {
+                    Text(state.localized("导出播放列表与设置，不含密码；导入后请点“全部刷新”加载频道，导入的订阅密码需重新填写。")).font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Button(state.localized("导出配置")) {
+                            if let data = state.exportConfigurationData(),
+                               let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+                                let url = dir.appendingPathComponent("nanostream-config.json")
+                                if (try? data.write(to: url)) != nil { exportURL = url; exportDate = Date() }
                             }
-                        }
-                    }.padding(14).background(Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16)
-                    // Import / export (R8-05).
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 10) {
-                            Button(state.localized("导出配置")) {
-                                if let data = state.exportConfigurationData(),
-                                   let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-                                    let url = dir.appendingPathComponent("nanostream-config.json")
-                                    if (try? data.write(to: url)) != nil { exportURL = url }
-                                }
-                            }.buttonStyle(.bordered).tint(state.accent)
-                            Button(state.localized("导入配置")) { showImporter = true }.buttonStyle(.bordered).tint(state.accent)
-                        }
-                        if let url = exportURL {
-                            ShareLink(item: url) { Label(state.localized("分享配置文件"), systemImage: "square.and.arrow.up") }.buttonStyle(.bordered).tint(state.accent)
-                        }
-                    }.padding(14).background(Color.card, in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal, 16)
-                }.padding(.bottom, 40)
-            }
-            .background(Color.appBackground)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(state.localized("关闭")) { dismiss() } } }
+                        }.buttonStyle(.bordered).tint(state.accent)
+                        Button(state.localized("导入配置")) { showImporter = true }.buttonStyle(.bordered).tint(state.accent)
+                    }
+                    if let exportDate {
+                        Text("\(state.localized("已导出")) nanostream-config.json · \(exportDate.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(state.accent)
+                    }
+                    ShareLink(item: exportURL ?? FileManager.default.temporaryDirectory.appendingPathComponent("nanostream-config.json")) {
+                        Label(state.localized("分享配置文件"), systemImage: "square.and.arrow.up")
+                    }.buttonStyle(.bordered).tint(state.accent).disabled(exportURL == nil)
+                }
+            }.padding(.bottom, 40)
         }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("配置中心"))
+        .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAdd) { PlaylistFormView() }
         .sheet(item: $editingPlaylist) { playlist in PlaylistFormView(editingPlaylist: playlist) }
         .alert(state.localized("删除播放列表"), isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
@@ -4287,6 +4393,50 @@ struct ConfigCenterView: View {
         .alert(state.localized("导入配置"), isPresented: $showImportAlert) {
             Button(state.localized("关闭"), role: .cancel) {}
         } message: { Text(importMessage ?? "") }
+    }
+}
+
+/// Dev round 21 (S-08): config-center playlist row. Only name,
+/// count · type, status and the enable switch live in the row. The
+/// text area opens the edit form on tap; sort/delete live in the
+/// long-press menu (swipe actions need a List, and this page is a
+/// ScrollView). The toggle sits outside the tap button so toggling
+/// never opens the editor by accident. 44pt minimum touch height.
+private struct ConfigPlaylistRow: View {
+    @EnvironmentObject private var state: AppState
+    let playlist: Playlist
+    let isFirst: Bool
+    let isLast: Bool
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onEdit) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(playlist.name).font(.headline).lineLimit(1)
+                        Text("\(playlist.channelCount) \(state.localized("频道")) · \(playlist.kind.rawValue)").font(.caption).foregroundStyle(.secondary)
+                        PlaylistStatusText(playlist: playlist)
+                    }
+                    Spacer()
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Toggle(isOn: Binding(get: { playlist.isEnabled }, set: { state.setPlaylistEnabled(playlist, $0) })) {
+                Text(state.localized("启用")).font(.caption).foregroundStyle(.secondary)
+            }.labelsHidden().tint(state.accent)
+        }
+        .frame(minHeight: 44)
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+        .contextMenu {
+            Button { onEdit() } label: { Label(state.localized("编辑"), systemImage: "pencil") }
+            Button { onMoveUp() } label: { Label(state.localized("上移"), systemImage: "chevron.up") }.disabled(isFirst)
+            Button { onMoveDown() } label: { Label(state.localized("下移"), systemImage: "chevron.down") }.disabled(isLast)
+            Button(role: .destructive) { onDelete() } label: { Label(state.localized("删除"), systemImage: "trash") }
+        }
     }
 }
 

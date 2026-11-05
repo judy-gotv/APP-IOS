@@ -58,79 +58,92 @@ struct SecretKeyField: View {
 
 struct LabView: View {
     @EnvironmentObject private var state: AppState
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text(state.localized("这里是还没做完的实验功能，可能不稳定、可能播不出、可能更耗电。开之前想清楚，出了问题关掉就能回到原来的播放方式。"))
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .padding(.horizontal, 18).padding(.top, 12)
-                    labToggle(
-                        title: state.localized("组播快速启动"),
-                        value: Binding(get: { state.labMulticastFCC }, set: { state.setLabMulticastFCC($0) }),
-                        caption: state.localized("只对组播地址起作用：缩短探测和初始缓冲，让组播频道起播更快。完整的运营商级快速换台需要服务端配合，没有服务端时这个开关只做播放器一侧的加速。")
-                    )
-                    labToggle(
-                        title: state.localized("多码率起播预选"),
-                        value: Binding(get: { state.labHLSVariantPreselect }, set: { state.setLabHLSVariantPreselect($0) }),
-                        caption: state.localized("多码率直播起播前先选定一档直接播，不用等播放器把全部码率都探一遍。只在自动和 KSPlayer 下生效；个别源预选后播不出来时，关掉就回到原来的播法。")
-                    )
-                    labToggle(
-                        title: state.localized("回看地址替换"),
-                        value: Binding(get: { state.labReplayPLTVToTVOD }, set: { state.setLabReplayPLTVToTVOD($0) }),
-                        caption: state.localized("回看播放前，把回看地址里的 PLTV 路径段换成 TVOD。只动回看地址，不动直播地址；回看源本来就不需要替换时，保持关闭。")
-                    )
-                    labToggle(
-                        title: state.localized("增强系统播放器"),
-                        value: Binding(get: { state.labEnhancedSystemPlayer }, set: { state.setLabEnhancedSystemPlayer($0) }),
-                        caption: state.localized("系统播放器遇到播不出的频道时，会换一条兼容路径再试一次，试过还不行才显示失败。下次播放生效；和自动切换 KSPlayer 是两回事。")
-                    )
-                    labToggle(
-                        title: state.localized("Metal 渲染"),
-                        value: Binding(get: { state.labMetalRendering }, set: { state.setLabMetalRendering($0) }),
-                        // Compile-fix round 2 (M-01): the switch is
-                        // real now — on selects KSPlayer's Metal
-                        // backend (KSMEPlayer), off keeps the
-                        // AVFoundation backend (KSAVPlayer). It only
-                        // affects the KS playback path; the pure
-                        // system-player path has no app-level Metal
-                        // switch and is unaffected. Toggling rebuilds
-                        // the player with the new backend.
-                        caption: state.localized("开：KS 播放改走 Metal 渲染后端；关：保持 AVFoundation 后端。只影响 KS 播放路径，纯系统播放器路径不受影响；切换后播放器会重建并改用新后端。")
-                    )
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(state.localized("实时字幕")).font(.headline)
-                        Text(state.localized("实验功能：识别会比画面慢，也可能漏段；只有带音频轨的流才能识别，没有音频轨的源会明确提示不支持，绝不会用麦克风冒充流内音频。默认关闭。"))
-                            .font(.caption).foregroundStyle(.secondary)
-                        ToggleRow(title: state.localized("实时字幕"), value: Binding(get: { state.liveSubtitleEnabled }, set: { state.setLiveSubtitleEnabled($0) }))
-                        SettingsPickerRow(
-                            title: state.localized("识别来源"),
-                            value: Binding(
-                                get: { state.liveSubtitleEngine.rawValue },
-                                set: { if let engine = LiveSubtitleEngine(rawValue: $0) { state.setLiveSubtitleEngine(engine) } }
-                            ),
-                            options: LiveSubtitleEngine.allCases.map(\.rawValue)
-                        )
-                        LabeledField(title: state.localized("转录接口地址"), text: Binding(get: { state.liveSubAPIBaseURL }, set: { state.setLiveSubAPIBaseURL($0) }))
-                        SecretKeyField(title: state.localized("转录密钥"), account: KeychainStore.liveSubAPIKeyAccount)
-                        LabeledField(title: state.localized("AI 转录接口地址"), text: Binding(get: { state.liveSubAIBaseURL }, set: { state.setLiveSubAIBaseURL($0) }))
-                        LabeledField(title: state.localized("AI 转录模型"), text: Binding(get: { state.liveSubAIModel }, set: { state.setLiveSubAIModel($0) }))
-                        SecretKeyField(title: state.localized("AI 转录密钥"), account: KeychainStore.liveSubAIKeyAccount)
-                        Text(state.localized("接口地址为空时对应档位不可用；识别失败时不显示任何文字，绝不编造字幕。"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(.horizontal, 18)
-                }.padding(.bottom, 40)
-            }
-            .navigationTitle(state.localized("实验室"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(state.localized("完成")) { dismiss() }
-                }
-            }
+        // Dev round 21 (S-03): no own NavigationStack anymore —
+        // this page is a hub destination inside SettingsView's stack,
+        // which provides the title and the back button.
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(state.localized("这里是还没做完的实验功能，可能不稳定、可能播不出、可能更耗电。开之前想清楚，出了问题关掉就能回到原来的播放方式。"))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .padding(.horizontal, 18).padding(.top, 12)
+                labToggle(
+                    title: state.localized("组播快速启动"),
+                    value: Binding(get: { state.labMulticastFCC }, set: { state.setLabMulticastFCC($0) }),
+                    caption: state.localized("只对组播地址起作用：缩短探测和初始缓冲，让组播频道起播更快。完整的运营商级快速换台需要服务端配合，没有服务端时这个开关只做播放器一侧的加速。")
+                )
+                labToggle(
+                    title: state.localized("多码率起播预选"),
+                    value: Binding(get: { state.labHLSVariantPreselect }, set: { state.setLabHLSVariantPreselect($0) }),
+                    caption: state.localized("多码率直播起播前先选定一档直接播，不用等播放器把全部码率都探一遍。只在自动和 KSPlayer 下生效；个别源预选后播不出来时，关掉就回到原来的播法。")
+                )
+                labToggle(
+                    title: state.localized("回看地址替换"),
+                    value: Binding(get: { state.labReplayPLTVToTVOD }, set: { state.setLabReplayPLTVToTVOD($0) }),
+                    caption: state.localized("回看播放前，把回看地址里的 PLTV 路径段换成 TVOD。只动回看地址，不动直播地址；回看源本来就不需要替换时，保持关闭。")
+                )
+                labToggle(
+                    title: state.localized("增强系统播放器"),
+                    value: Binding(get: { state.labEnhancedSystemPlayer }, set: { state.setLabEnhancedSystemPlayer($0) }),
+                    caption: state.localized("系统播放器遇到播不出的频道时，会换一条兼容路径再试一次，试过还不行才显示失败。下次播放生效；和自动切换 KSPlayer 是两回事。")
+                )
+                labToggle(
+                    title: state.localized("Metal 渲染"),
+                    value: Binding(get: { state.labMetalRendering }, set: { state.setLabMetalRendering($0) }),
+                    // Compile-fix round 2 (M-01): the switch is
+                    // real now — on selects KSPlayer's Metal
+                    // backend (KSMEPlayer), off keeps the
+                    // AVFoundation backend (KSAVPlayer). It only
+                    // affects the KS playback path; the pure
+                    // system-player path has no app-level Metal
+                    // switch and is unaffected. Toggling rebuilds
+                    // the player with the new backend.
+                    caption: state.localized("开：KS 播放改走 Metal 渲染后端；关：保持 AVFoundation 后端。只影响 KS 播放路径，纯系统播放器路径不受影响；切换后播放器会重建并改用新后端。")
+                )
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(state.localized("实时字幕")).font(.headline)
+                    Text(state.localized("实验功能：识别会比画面慢，也可能漏段；只有带音频轨的流才能识别，没有音频轨的源会明确提示不支持，绝不会用麦克风冒充流内音频。默认关闭。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    ToggleRow(title: state.localized("实时字幕"), value: Binding(get: { state.liveSubtitleEnabled }, set: { state.setLiveSubtitleEnabled($0) }))
+                    // Dev round 21 rework (R-06): text radio rows, the
+                    // same pattern as the translation page's source
+                    // selector — the old menu rendered the engine
+                    // codes through localizedValue, so users saw
+                    // "system / api / ai" here. The titles describe
+                    // recognition (transcription), not translation:
+                    // this picker picks the speech-recognition source,
+                    // and the fields below are transcription fields.
+                    Text(state.localized("识别来源")).font(.subheadline)
+                    ForEach(LiveSubtitleEngine.allCases, id: \.self) { engine in
+                        Button {
+                            state.setLiveSubtitleEngine(engine)
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(recognitionEngineTitle(engine)).font(.system(size: 18))
+                                    Text(recognitionEngineDescription(engine)).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if state.liveSubtitleEngine == engine {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(state.accent).font(.system(size: 20))
+                                }
+                            }.padding(.vertical, 11)
+                        }.buttonStyle(.plain)
+                            .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+                    }
+                    LabeledField(title: state.localized("转录接口地址"), text: Binding(get: { state.liveSubAPIBaseURL }, set: { state.setLiveSubAPIBaseURL($0) }))
+                    SecretKeyField(title: state.localized("转录密钥"), account: KeychainStore.liveSubAPIKeyAccount)
+                    LabeledField(title: state.localized("AI 转录接口地址"), text: Binding(get: { state.liveSubAIBaseURL }, set: { state.setLiveSubAIBaseURL($0) }))
+                    LabeledField(title: state.localized("AI 转录模型"), text: Binding(get: { state.liveSubAIModel }, set: { state.setLiveSubAIModel($0) }))
+                    SecretKeyField(title: state.localized("AI 转录密钥"), account: KeychainStore.liveSubAIKeyAccount)
+                    Text(state.localized("接口地址为空时对应档位不可用；识别失败时不显示任何文字，绝不编造字幕。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.horizontal, 18)
+            }.padding(.bottom, 40)
         }
+        .navigationTitle(state.localized("实验室"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func labToggle(title: String, value: Binding<Bool>, caption: String) -> some View {
@@ -139,6 +152,26 @@ struct LabView: View {
             Text(caption).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 18)
+    }
+
+    // Dev round 21 rework (R-06): recognition-source titles and
+    // descriptions for the radio rows above. They deliberately reuse
+    // the translation page's wording style but name recognition, not
+    // translation, because the engine here transcribes stream audio.
+    private func recognitionEngineTitle(_ engine: LiveSubtitleEngine) -> String {
+        switch engine {
+        case .system: return state.localized("系统内置识别")
+        case .api: return state.localized("自定义转录接口")
+        case .ai: return state.localized("大模型转录")
+        }
+    }
+
+    private func recognitionEngineDescription(_ engine: LiveSubtitleEngine) -> String {
+        switch engine {
+        case .system: return state.localized("调用设备自带的语音识别，无需填写地址和密钥")
+        case .api: return state.localized("向你填写的转录接口地址发送音频并取回文本")
+        case .ai: return state.localized("用你填写的 AI 转录接口地址、模型和密钥逐段转录")
+        }
     }
 }
 

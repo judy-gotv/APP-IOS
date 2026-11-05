@@ -64,9 +64,13 @@ final class AppState: ObservableObject {
     // persisted in UserDefaults. Recorded only on submit, never on
     // every keystroke.
     @Published var searchHistory: [String] = []
-    // Dev round 6 (R6-07): adjustable preview concurrency, default 4,
-    // clamped 1...8. PreviewSessionPool reads the same key live.
-    @Published var previewLimit: Int = 4
+    // Dev round 6 (R6-07): adjustable preview concurrency, default 2
+    // (round 21, was 4), clamped 1...8. PreviewSessionPool reads the
+    // same key live.
+    // Dev round 21 (C-01): fresh-install default 2 (was 4). A stored
+    // value is untouched — only the unset/invalid fallback changes
+    // (see clampedPreviewLimit), so existing users keep their setting.
+    @Published var previewLimit: Int = 2
     // Dev round 6 (R6-09): probed resolution labels keyed by channel
     // id, recorded only when a real player reports a video size.
     // Never guessed from the channel name; only used when the source
@@ -341,7 +345,11 @@ final class AppState: ObservableObject {
         stateRestoreFailed = restoreFailed
         language = UserDefaults.standard.string(forKey: "nanostream.language") ?? "中文"
         themeMode = UserDefaults.standard.string(forKey: "nanostream.theme") ?? "System"
-        colorTheme = Self.migratedColorTheme(UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "toxic")
+        // Dev round 21 (T-01): fresh installs default to neonPink
+        // (霓虹粉), confirmed by the user's pick. A stored value
+        // (including an old "toxic") is never overwritten — only
+        // users who never chose a theme get the new default.
+        colorTheme = Self.migratedColorTheme(UserDefaults.standard.string(forKey: "nanostream.colorTheme") ?? "neonPink")
         let defaults = UserDefaults.standard
         // Migration fix: respect a previously stored player preference even
         // when the v1 flag is absent (older installs were forced to KSPlayer).
@@ -530,7 +538,10 @@ final class AppState: ObservableObject {
         case "剧毒绿": return "toxic"
         case "霓虹粉": return "neonPink"
         case "深海蓝": return "deepBlue"
-        default: return "toxic"
+        // Dev round 21 (T-01): unknown/missing values default to
+        // neonPink (was toxic), per the user's pick. Only new
+        // installs are affected.
+        default: return "neonPink"
         }
     }
 
@@ -600,13 +611,16 @@ final class AppState: ObservableObject {
 
     /// Every channel known to any playlist, not just the active one, so
     /// favorites and recent items do not "disappear" when switching playlists.
-    /// Round-3 fix (C05): stableID is still name|streamURL by design, so
-    /// the same channel in two subscriptions still shares one id — but
-    /// resolution is now deterministic: playlists are walked in list order
-    /// (first playlist wins) instead of dictionary order, which previously
-    /// made "which copy wins" nondeterministic across launches. A
-    /// favorite/recent entry therefore always resolves to the first
-    /// playlist that contains it.
+    /// Round-3 fix (C05): resolution is deterministic: playlists are
+    /// walked in list order (first playlist wins) instead of dictionary
+    /// order, which previously made "which copy wins" nondeterministic
+    /// across launches. A favorite/recent entry therefore always
+    /// resolves to the first playlist that contains it.
+    /// Dev round 21 (C-03): stableID now carries the group dimension
+    /// (name|group|url), so the same name+url in two groups no longer
+    /// shares one id; ids minted before that (name|url only) still
+    /// resolve via matchesPreMergeLineID's legacy fallback, so old
+    /// favorites and history never go missing.
     var allChannels: [Channel] {
         var seen = Set<String>()
         var result: [Channel] = []
@@ -732,9 +746,11 @@ final class AppState: ObservableObject {
     func setPreviewEnabled(_ value: Bool) { previewEnabled = value; UserDefaults.standard.set(value, forKey: "nanostream.previewEnabled") }
 
     // Dev round 6 (R6-07): preview concurrency clamp. A stored 0 (key
-    // never set) means the default 4, matching the old hardcoded limit.
+    // never set) means the default 2 (round 21, was 4).
     static func clampedPreviewLimit(_ value: Int) -> Int {
-        guard value > 0 else { return 4 }
+        // Dev round 21 (C-01): unset (0) or invalid falls back to 2,
+        // not 4 — fewer concurrent decodes at submit time.
+        guard value > 0 else { return 2 }
         return min(max(value, 1), 8)
     }
 
@@ -763,11 +779,15 @@ final class AppState: ObservableObject {
     // Dev round 6 (R6-02): batch removal for the favorites edit mode.
     // Mirrors toggleFavorite's rollback: a failed save restores the
     // whole set instead of leaving a half-deleted list.
-    func removeFavorites(_ ids: Set<String>) {
+    // Dev round 21 rework (R-02): async — the persist result is awaited
+    // so the rollback below still runs on failure, without the caller
+    // ever blocking the main thread for the encode.
+    func removeFavorites(_ ids: Set<String>) async {
         guard !ids.isEmpty else { return }
         let previous = favorites
         favorites.subtract(ids)
-        if !save() { favorites = previous; saveError = localized("保存失败，数据未写入。") } else { saveError = nil }
+        let saved = await save().value
+        if !saved { favorites = previous; saveError = localized("保存失败，数据未写入。") } else { saveError = nil }
     }
 
     // Dev round 6 (R6-09): record a probed resolution label for a
@@ -1320,8 +1340,12 @@ final class AppState: ObservableObject {
         case "30分钟": return localized("30分钟")
         case "60分钟": return localized("60分钟")
         case "6小时": return localized("6小时")
-        // Dev round 10 (D-02/D-07): engine picker values. "API"/"AI"
-        // pass through unchanged (they are not localizable words).
+        // Dev round 21 rework (R-06): no user-visible surface routes
+        // engine codes through here anymore — the translation page
+        // uses text radio rows, and the Lab recognition picker now
+        // does too (see LabView). The default passthrough below stays
+        // only as a fallback for values no UI renders; nothing on any
+        // page passes "api"/"ai" through this function anymore.
         case "system": return localized("系统")
         // Dev round 19 (T-01): translation mode picker values.
         case "subtitle": return localized("字幕翻")
@@ -1389,7 +1413,8 @@ final class AppState: ObservableObject {
         favorites.contains(channel.id) || favorites.contains { Self.isLegacySuffixID($0, of: channel.id) } || favorites.contains { channel.matchesPreMergeLineID($0) }
     }
 
-    func toggleFavorite(_ channel: Channel) {
+    // Dev round 21 rework (R-02): async, see removeFavorites.
+    func toggleFavorite(_ channel: Channel) async {
         // Round-3 fix (C09): roll the in-memory change back when the
         // persist fails, instead of showing a starred channel that
         // vanishes on restart with no visible error on this page.
@@ -1406,7 +1431,8 @@ final class AppState: ObservableObject {
             let otherIDs = Set(allChannels.map(\.id).filter { $0 != channel.id })
             favorites = favorites.filter { $0 != channel.id && !Self.isLegacySuffixID($0, of: channel.id) && !(channel.matchesPreMergeLineID($0) && !otherIDs.contains($0)) }
         } else { favorites.insert(channel.id) }
-        if save() {
+        let saved = await save().value
+        if saved {
             saveError = nil
         } else {
             favorites = previousFavorites
@@ -1414,7 +1440,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    func play(_ channel: Channel) {
+    // Dev round 21 rework (R-02): async, see removeFavorites.
+    func play(_ channel: Channel) async {
         let previousSelected = selectedChannel
         let previousRecent = recent
         selectedChannel = channel
@@ -1424,7 +1451,8 @@ final class AppState: ObservableObject {
         recent.removeAll { $0.channelID == channel.id }
         recent.insert(RecentEntry(channelID: channel.id, watchedAt: Date()), at: 0)
         recent = Array(recent.prefix(24))
-        if save() {
+        let saved = await save().value
+        if saved {
             saveError = nil
         } else {
             selectedChannel = previousSelected
@@ -2271,8 +2299,14 @@ final class AppState: ObservableObject {
             // but only on a successful save, never unconditionally in
             // save() itself (a later unrelated save must not hide an
             // unresolved migration failure).
-            if save() { saveError = nil }
-            completion(true)
+            // Dev round 21 rework (R-02): the persist is awaited inside
+            // a task so this sync completion-handler API never blocks
+            // the main thread for the encode; completion still fires
+            // exactly once, after the save resolves.
+            Task {
+                if await save().value { saveError = nil }
+                completion(true)
+            }
             return
         }
         // Load-first: validate the new endpoint/credentials before committing
@@ -2402,7 +2436,9 @@ final class AppState: ObservableObject {
                 // password so the next launch is self-consistent (old
                 // persisted playlist + old password); the in-memory state
                 // stays new for this session, which is the residual gap.
-                if !save() {
+                // Dev round 21 rework (R-02): awaited, see removeFavorites.
+                let saved = await save().value
+                if !saved {
                     if (playlist.kind == .xtream || playlist.kind == .tvHeadend), !playlist.password.isEmpty {
                         if candidatePassword.isEmpty { KeychainStore.deletePassword(for: playlist.id) }
                         else { _ = KeychainStore.savePassword(candidatePassword, for: playlist.id) }
@@ -2439,10 +2475,12 @@ final class AppState: ObservableObject {
     /// swipe-to-delete). Removing the entry never touches favorites,
     /// and a persist failure restores the entry instead of dropping
     /// it silently. Clear-all reuses the existing clearHistory().
-    func removeHistoryEntry(channelID: String) {
+    // Dev round 21 rework (R-02): async, see removeFavorites.
+    func removeHistoryEntry(channelID: String) async {
         let previous = recent
         recent.removeAll { $0.channelID == channelID }
-        if !save() { recent = previous; saveError = localized("保存失败，数据未写入。") } else { saveError = nil }
+        let saved = await save().value
+        if !saved { recent = previous; saveError = localized("保存失败，数据未写入。") } else { saveError = nil }
     }
     func clearFavorites() { favorites.removeAll(); save() }
     func clearImageCache() { URLCache.shared.removeAllCachedResponses(); setNotice(localized("图片缓存已清除。")) }
@@ -2504,7 +2542,9 @@ final class AppState: ObservableObject {
             // Keychain password so the next launch is not left with a
             // credential for a playlist that was never persisted (the
             // in-memory insert stays for this session: residual gap).
-            if !save() {
+            // Dev round 21 rework (R-02): awaited, see removeFavorites.
+            let saved = await save().value
+            if !saved {
                 if (kind == .xtream || kind == .tvHeadend), !password.isEmpty {
                     KeychainStore.deletePassword(for: playlist.id)
                 }
@@ -2571,30 +2611,56 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Returns false when encoding fails. Callers that already mutated
-    /// in-memory state (toggleFavorite/play) roll back on false; other
-    /// callers keep the old fire-and-forget behaviour via @discardableResult.
+    /// Serial queue for save encodes. Saves are enqueued in call order
+    /// and each encode runs to completion before the next starts, so
+    /// overlapping saves can never complete out of order and regress
+    /// the disk to an older snapshot.
+    private let saveEncodeQueue = DispatchQueue(label: "nanostream.save-encode", qos: .utility)
+
+    /// Returns a task resolving to false when encoding fails. Callers
+    /// that already mutated in-memory state (toggleFavorite/play) roll
+    /// back on false; other callers keep the old fire-and-forget
+    /// behaviour via @discardableResult.
+    /// Dev round 21 rework (R-02): the round-21 fix only moved the
+    /// encode to `DispatchQueue.global().sync`, so callers on the main
+    /// thread still waited for the whole encode and the submit-time
+    /// stall and memory peak did not shrink at all. This version takes
+    /// the snapshot synchronously at call time (same fields, same bytes
+    /// for the same in-memory state as the old synchronous save) and
+    /// returns immediately; the encode and the write run inside the
+    /// returned task. No caller blocks waiting for an encode anymore:
+    /// rollback callers `await` the task's value, fire-and-forget
+    /// callers just drop it. The write order is unchanged (serial
+    /// queue, call order), the bytes are identical, and an encode
+    /// failure takes the same error path as before (no silent drop).
     @discardableResult
-    private func save() -> Bool {
+    private func save() -> Task<Bool, Never> {
         // Channels are derived from channelSetsByPlaylist for the active
         // playlist, so they are not written twice. When there is no per-
         // playlist cache (legacy state), the flat list is still written.
         let channelsToSave = channelSetsByPlaylist.isEmpty ? channels : []
         let state = SavedState(channels: channelsToSave, playlists: playlists, favorites: favorites, recent: recent, activePlaylistID: activePlaylistID, channelSetsByPlaylist: channelSetsByPlaylist)
-        guard let data = try? JSONEncoder().encode(state) else {
-            setNotice(localized("保存失败，数据未写入。"), isError: true)
-            return false
+        return Task {
+            let data: Data? = await withCheckedContinuation { continuation in
+                saveEncodeQueue.async {
+                    continuation.resume(returning: try? JSONEncoder().encode(state))
+                }
+            }
+            guard let data else {
+                setNotice(localized("保存失败，数据未写入。"), isError: true)
+                return false
+            }
+            UserDefaults.standard.set(data, forKey: storageKey)
+            // A backup from a previous corrupt restore is now expired: the
+            // current state saved cleanly, so the stale backup must not linger.
+            UserDefaults.standard.removeObject(forKey: storageKey + ".bak")
+            // Dev round 10 (D-04): push the new snapshot to iCloud
+            // key-value storage when sync is enabled. The push itself
+            // no-ops without an iCloud environment, and it never carries
+            // passwords (they live in the Keychain, not in SavedState).
+            if iCloudSyncEnabled { ICloudSync.shared.push(from: self) }
+            return true
         }
-        UserDefaults.standard.set(data, forKey: storageKey)
-        // A backup from a previous corrupt restore is now expired: the
-        // current state saved cleanly, so the stale backup must not linger.
-        UserDefaults.standard.removeObject(forKey: storageKey + ".bak")
-        // Dev round 10 (D-04): push the new snapshot to iCloud
-        // key-value storage when sync is enabled. The push itself
-        // no-ops without an iCloud environment, and it never carries
-        // passwords (they live in the Keychain, not in SavedState).
-        if iCloudSyncEnabled { ICloudSync.shared.push(from: self) }
-        return true
     }
 
     // Dev round 10 (D-04): the iCloud snapshot. Playlists carry

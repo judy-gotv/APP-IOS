@@ -31,9 +31,15 @@ struct Channel: Identifiable, Hashable, Codable {
     var tags: [String]
 
     init(id: String? = nil, name: String, group: String, streamURL: URL? = nil, logoURL: URL? = nil, epgID: String? = nil, quality: String? = nil, isLive: Bool = true, channelNumber: String? = nil, alternateURLs: [URL] = [], catchupSource: String? = nil, tags: [String] = []) {
-        self.id = id ?? Self.stableID(name: name, streamURL: streamURL)
+        // Dev round 21 (C-03): the id carries the group dimension
+        // (name|group|url), so the same name+url in two groups can
+        // no longer collide into one id. The group is resolved first
+        // (empty folds to __other__) so the hash always sees the
+        // stored group value, never the raw empty string.
+        let resolvedGroup = group.isEmpty ? GroupID.other : group
+        self.id = id ?? Self.stableID(name: name, group: resolvedGroup, streamURL: streamURL)
         self.name = name
-        self.group = group.isEmpty ? GroupID.other : group
+        self.group = resolvedGroup
         self.streamURL = streamURL
         self.logoURL = logoURL
         self.epgID = epgID
@@ -83,22 +89,42 @@ struct Channel: Identifiable, Hashable, Codable {
     /// Dev round 4 (R4-01): whether an id belongs to one of the
     /// pre-merge independent rows that folded into this entry. The
     /// first row's id is the entry id itself (a direct match); a
-    /// second row's id was stableID(name|its URL), and that URL now
-    /// lives in streamURL (adopted when the first row had none) or in
-    /// alternateURLs. Matching those ids keeps old favorites and
-    /// history resolving to the merged entry instead of silently
+    /// second row's id was stableID(name|group|its URL), and that URL
+    /// now lives in streamURL (adopted when the first row had none)
+    /// or in alternateURLs. Matching those ids keeps old favorites
+    /// and history resolving to the merged entry instead of silently
     /// disappearing. Nothing here is guessed: only ids the merge
-    /// actually produced from this name and these URLs match.
+    /// actually produced from this name, group and these URLs match.
+    /// Dev round 21 (C-03): ids minted before the group dimension
+    /// (name|url only) are matched too, via legacyStableID below, so
+    /// favorites and history stored under the old scheme keep
+    /// resolving through the same lookup (channel(for:) tries the
+    /// direct id, then the "-N" alias, then this function). New ids
+    /// always carry the group; the legacy form is lookup-only and is
+    /// never minted for new entries.
     func matchesPreMergeLineID(_ id: String) -> Bool {
         if id == self.id { return true }
-        if Self.stableID(name: name, streamURL: streamURL) == id { return true }
-        return alternateURLs.contains { Self.stableID(name: name, streamURL: $0) == id }
+        if Self.stableID(name: name, group: group, streamURL: streamURL) == id { return true }
+        if alternateURLs.contains { Self.stableID(name: name, group: group, streamURL: $0) == id } { return true }
+        if Self.legacyStableID(name: name, streamURL: streamURL) == id { return true }
+        return alternateURLs.contains { Self.legacyStableID(name: name, streamURL: $0) == id }
     }
 
-    private static func stableID(name: String, streamURL: URL?) -> String {
+    private static func stableID(name: String, group: String, streamURL: URL?) -> String {
+        hashID("\(name)|\(group)|\(streamURL?.absoluteString ?? "")")
+    }
+
+    /// Pre-group id scheme (name|url only), kept for lookup
+    /// compatibility only — see matchesPreMergeLineID. Never used to
+    /// mint ids for new entries since dev round 21 (C-03).
+    private static func legacyStableID(name: String, streamURL: URL?) -> String {
+        hashID("\(name)|\(streamURL?.absoluteString ?? "")")
+    }
+
+    private static func hashID(_ input: String) -> String {
         var first: UInt64 = 1469598103934665603
         var second: UInt64 = 1099511628211
-        for byte in "\(name)|\(streamURL?.absoluteString ?? "")".utf8 {
+        for byte in input.utf8 {
             first ^= UInt64(byte)
             first &*= 1099511628211
             second ^= first

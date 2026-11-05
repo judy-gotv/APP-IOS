@@ -278,6 +278,20 @@ enum HLSMediaLoader {
 ///   code>. Reply with only the translation, no explanation."
 ///   The first choice's message content is the translation.
 enum TranslationService {
+    /// Dev round 21 (S-05): whether the system engine can run in this
+    /// build at all. Mirrors translateViaSystem's gate exactly: the
+    /// programmatic TranslationSession type only exists from Xcode 16
+    /// / Swift 6, so older toolchains always take the systemUnavailable
+    /// branch. The settings page shows this honestly instead of
+    /// promising a source that cannot run.
+    static var systemEngineAvailable: Bool {
+        #if compiler(>=6.0) && canImport(Translation)
+        return true
+        #else
+        return false
+        #endif
+    }
+
     static func translate(
         _ text: String,
         target: String,

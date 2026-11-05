@@ -1,8 +1,33 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// Dev round 21 (S-01/S-02): settings hub destinations. The hub
+// page lists one row per destination; each destination is its own
+// navigation page carrying the old section's content verbatim.
+enum SettingsDestination: Hashable {
+    case language
+    case configCenter
+    case lab
+    case appearance
+    case playback
+    case subtitleTranslation
+    case carPlay
+    case network
+    case buffer
+    case dataCache
+    case epg
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var state: AppState
+    // Dev round 21 (S-01): bound to the tab host, which hides its
+    // custom BottomBar while a settings page is pushed (see
+    // ContentView). Set from the navigation path below; the
+    // onDisappear on the outer NavigationStack (not on the hub
+    // ScrollView, which also disappears on push) clears it when the
+    // settings tab itself is left.
+    @Binding var navActive: Bool
+    @State private var path: [SettingsDestination] = []
     @AppStorage("subtitleFontSize") private var subtitleFontSize = 18.0
     @AppStorage("httpProxy") private var httpProxy = ""
     // Round-6 fix (A02): mirrors M3UParser.proxyMigrationFailed, synced
@@ -75,38 +100,173 @@ struct SettingsView: View {
     @State private var showClearHistoryConfirm = false
     @State private var showClearFavoritesConfirm = false
     @State private var showDeleteEPGConfirm = false
-    @State private var showConfigCenter = false
-    // Dev round 10 (D-01): lab page sheet flag.
-    @State private var showLab = false
     // Dev round 8 (R8-03): global AV bitrate cap options. 0 means
     // unlimited; the labels are numbers plus "Mbps" and need no
     // translation except the unlimited entry.
     private let bitrateOptions: [(String, Double)] = [("不限", 0), ("16 Mbps", 16_000_000), ("12 Mbps", 12_000_000), ("8 Mbps", 8_000_000), ("4 Mbps", 4_000_000), ("2 Mbps", 2_000_000), ("1 Mbps", 1_000_000)]
+
+    // Dev round 21 (S-02): number of lab switches currently on (the
+    // six experiment switches plus live subtitles).
+    private var labEnabledCount: Int {
+        [state.labMulticastFCC, state.labHLSVariantPreselect, state.labReplayPLTVToTVOD, state.labEnhancedSystemPlayer, state.labMetalRendering, state.liveSubtitleEnabled].filter { $0 }.count
+    }
+
+    // Dev round 21 (S-04/S-06), rework (R-06): translation source
+    // titles. The translation page and the hub summary use these
+    // directly and never go through localizedValue; the Lab
+    // recognition picker now uses its own text radio rows too, so no
+    // user-visible surface routes engine codes through localizedValue
+    // anymore (see AppState).
+    private func translationEngineTitle(_ engine: TranslationEngine) -> String {
+        switch engine {
+        case .system: return state.localized("系统内置翻译")
+        case .api: return state.localized("自定义翻译接口")
+        case .ai: return state.localized("大模型翻译")
+        }
+    }
+    private func translationEngineDescription(_ engine: TranslationEngine) -> String {
+        switch engine {
+        case .system: return state.localized("调用设备自带的翻译功能，无需填写地址和密钥，开箱即用（需要 iOS 18 或以上）")
+        case .api: return state.localized("向你填写的翻译接口地址发送原文并取回译文，密钥可选")
+        case .ai: return state.localized("用你填写的 OpenAI 兼容接口地址、模型和密钥逐句翻译")
+        }
+    }
+
+    // Dev round 21 (S-05): translation mode captions. Listen mode
+    // translates recognised speech into subtitles; it is not dubbing.
+    private var translationModeCaption: String {
+        switch state.translationMode {
+        case .subtitle: return state.localized("翻译字幕文本后显示译文。")
+        case .listen: return state.localized("识别语音并翻译后显示字幕，不是配音。")
+        }
+    }
+
+    // Dev round 21 (S-05): honest system-source support status. The
+    // system branch needs Xcode 16+ to build (see
+    // TranslationService.systemEngineAvailable); on this build it is
+    // unavailable, and the page must say so rather than promise it.
+    private var systemEngineStatusText: String {
+        if !TranslationService.systemEngineAvailable {
+            return state.localized("当前构建下不可用，需要 Xcode 16 或以上构建。")
+        }
+        if #available(iOS 18.0, macOS 15.0, *) {
+            return state.localized("当前设备支持。")
+        }
+        return state.localized("需要 iOS 18 或 macOS 15 或以上。")
+    }
+
     var body: some View {
+        NavigationStack(path: $path) {
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 14) {
+                    SettingsSection(title: state.localized("设置"), icon: "gearshape") {
+                        NavigationLink(value: SettingsDestination.language) {
+                            SettingsHubRow(title: state.localized("语言"), icon: "globe", summary: state.language)
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.configCenter) {
+                            SettingsHubRow(title: state.localized("配置中心"), icon: "rectangle.stack", summary: "\(state.playlists.count) \(state.localized("个播放列表"))")
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.lab) {
+                            SettingsHubRow(title: state.localized("实验室"), icon: "flask", summary: labEnabledCount == 0 ? state.localized("全部关闭") : "\(labEnabledCount) \(state.localized("项开启"))")
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.appearance) {
+                            SettingsHubRow(title: state.localized("外观"), icon: "paintbrush", summary: "\(state.localizedValue(state.colorTheme)) · \(state.localizedValue(state.themeMode))")
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.playback) {
+                            SettingsHubRow(title: state.localized("播放设置"), icon: "play.circle", summary: state.preferredPlayer.rawValue)
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.subtitleTranslation) {
+                            SettingsHubRow(title: state.localized("字幕翻译"), icon: "captions.bubble", summary: state.subtitleTranslationEnabled ? "\(translationEngineTitle(state.translationEngine)) · \(state.localizedValue(state.translationMode.rawValue))" : state.localized("已关闭"))
+                        }.buttonStyle(.plain)
+                        #if os(iOS)
+                        NavigationLink(value: SettingsDestination.carPlay) {
+                            if #available(iOS 26.4, *) {
+                                SettingsHubRow(title: state.localized("CarPlay"), icon: "car", summary: state.localized("音频可用 · 视频可用"))
+                            } else {
+                                SettingsHubRow(title: state.localized("CarPlay"), icon: "car", summary: state.localized("音频可用 · 视频需 iOS 26.4+"))
+                            }
+                        }.buttonStyle(.plain)
+                        #endif
+                        NavigationLink(value: SettingsDestination.network) {
+                            SettingsHubRow(title: state.localized("网络"), icon: "globe.americas", summary: httpProxy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? state.localized("未设置代理") : state.localized("已设置代理"))
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.buffer) {
+                            SettingsHubRow(title: state.localized("缓冲区"), icon: "memorychip", summary: "\(Int(state.networkBufferMilliseconds)) ms")
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.dataCache) {
+                            SettingsHubRow(title: state.localized("数据与缓存"), icon: "externaldrive", summary: state.cacheUsageText)
+                        }.buttonStyle(.plain)
+                        NavigationLink(value: SettingsDestination.epg) {
+                            SettingsHubRow(title: state.localized("EPG节目单"), icon: "list.bullet.rectangle.portrait", summary: state.epgURL.isEmpty ? state.localized("未设置") : state.localized("已设置"))
+                        }.buttonStyle(.plain)
+                    }
+                    Text(state.localized("NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。")).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading).padding(.horizontal, 22).padding(.bottom, 120)
+                }
+            }
+            .background(Color.appBackground)
+            .navigationTitle(state.localized("设置"))
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: SettingsDestination.self) { destination in
+                switch destination {
+                case .language: languagePage
+                case .configCenter: ConfigCenterView()
+                case .lab: LabView()
+                case .appearance: appearancePage
+                case .playback: playbackPage
+                case .subtitleTranslation: subtitleTranslationPage
+                #if os(iOS)
+                case .carPlay: carPlayPage
+                #else
+                case .carPlay: EmptyView()
+                #endif
+                case .network: networkPage
+                case .buffer: bufferPage
+                case .dataCache: dataCachePage
+                case .epg: epgPage
+                }
+            }
+        }
+        .onChange(of: path) { newPath in navActive = !newPath.isEmpty }
+        .onDisappear { navActive = false }
+    }
+
+    // Dev round 21 (S-03): each page below carries its old section's
+    // content; nothing is added or removed except where the checklist
+    // says so (translation page, CarPlay page, preview caption).
+
+    private var languagePage: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 14) {
-                Text(state.localized("设置")).font(.system(size: 22, weight: .bold)).padding(.top, 52)
                 SettingsSection(title: state.localized("语言"), icon: "globe") {
                     // Dev round 8 (R8-01): options come from the single
                     // source of truth (AppState.supportedLanguages), so
                     // an option can never exist without table coverage.
                     SettingsPickerRow(title: state.localized("语言"), value: Binding(get: { state.language }, set: { state.setLanguage($0) }), options: AppState.supportedLanguages)
                 }
-                SettingsSection(title: state.localized("配置中心"), icon: "gearshape.2") {
-                    ActionRow(title: state.localized("配置中心"), icon: "rectangle.stack") { showConfigCenter = true }
-                }
-                .sheet(isPresented: $showConfigCenter) { ConfigCenterView().environmentObject(state) }
-                // Dev round 10 (D-01): lab entry. The page itself is
-                // shared UI; the platform-exclusive capabilities
-                // (CarPlay/iCloud/DLNA) are gated separately below.
-                SettingsSection(title: state.localized("实验室"), icon: "flask") {
-                    ActionRow(title: state.localized("实验室"), icon: "flask") { showLab = true }
-                }
-                .sheet(isPresented: $showLab) { LabView().environmentObject(state) }
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("语言"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var appearancePage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("外观"), icon: "paintbrush") {
                     SettingsPickerRow(title: state.localized("主题模式"), value: Binding(get: { state.themeMode }, set: { state.setTheme($0) }), options: ["System", "Light", "Dark"])
                     SettingsPickerRow(title: state.localized("色彩主题"), value: Binding(get: { state.colorTheme }, set: { state.setColorTheme($0) }), options: ["cyberpunk", "sunset", "toxic", "neonPink", "deepBlue"])
                 }
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("外观"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var playbackPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("播放设置"), icon: "play.circle") {
                     ToggleRow(title: state.localized("画中画"), value: Binding(get: { state.pictureInPicture }, set: { state.setPictureInPicture($0) }))
                     ToggleRow(title: state.localized("硬件加速"), value: Binding(get: { state.hardwareAcceleration }, set: { state.setHardwareAcceleration($0) }))
@@ -150,9 +310,10 @@ struct SettingsView: View {
                     ToggleRow(title: state.localized("预览"), value: Binding(get: { state.previewEnabled }, set: { state.setPreviewEnabled($0) }))
                     // Dev round 6 (R6-07): adjustable preview
                     // concurrency (was hardcoded 4 in the pool).
-                    // Default 4, clamped 1...8 by the setter.
+                    // Dev round 21 (C-01): default 2, clamped 1...8
+                    // by the setter; the caption states the default.
                     HStack { Text("\(state.localized("预览并发上限"))  \(state.previewLimit)").font(.system(size: 18)); Spacer(); Stepper("", value: Binding(get: { state.previewLimit }, set: { state.setPreviewLimit($0) }), in: 1...8, step: 1).labelsHidden() }
-                    Text(state.localized("同时预览的路数，1–8 路。")).font(.caption).foregroundStyle(.secondary)
+                    Text(state.localized("同时预览的路数，1–8 路，缺省 2 路。")).font(.caption).foregroundStyle(.secondary)
                     ToggleRow(title: state.localized("显示延迟"), value: Binding(get: { state.showLatency }, set: { state.setShowLatency($0) }))
                     VStack(alignment: .leading, spacing: 10) {
                         Text(state.localized("首选播放器")).font(.system(size: 18))
@@ -167,43 +328,133 @@ struct SettingsView: View {
                     // AVPlayerItem.textStyleRules with 18pt as 100%.
                     Text(state.localized("KSPlayer 与系统播放器均按此值渲染字幕（系统播放器以 18pt 为 100% 换算，KSPlayer 再按屏幕宽度缩放）。")).font(.caption).foregroundStyle(.secondary)
                 }
-                // Dev round 10 (D-02): subtitle translation. Target
-                // language follows the app language; a failed
-                // translation shows the original with an untranslated
-                // mark; an empty base URL disables that source (never
-                // a silent fallback); keys live in the Keychain only.
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("播放设置"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // Dev round 21 (S-04/S-05): subtitle translation page. The source
+    // is three radio rows with a title and one plain-language line
+    // each — never the raw api/ai codes. Fields are mutually
+    // exclusive: only the selected source's group is shown. The
+    // master switch stays on top; turning it off hides everything
+    // below it, while the footer notes stay put.
+    private var subtitleTranslationPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("字幕翻译"), icon: "captions.bubble") {
                     ToggleRow(title: state.localized("字幕翻译"), value: Binding(get: { state.subtitleTranslationEnabled }, set: { state.setSubtitleTranslationEnabled($0) }))
-                    // Dev round 19 (T-01): translation mode choice.
-                    // Default subtitle, so existing subtitle
-                    // translation users keep their old behaviour; the
-                    // mode only changes the translation input source.
-                    SettingsPickerRow(title: state.localized("翻译模式"), value: Binding(get: { state.translationMode.rawValue }, set: { if let mode = TranslationMode(rawValue: $0) { state.setTranslationMode(mode) } }), options: TranslationMode.allCases.map(\.rawValue))
-                    SettingsPickerRow(title: state.localized("翻译来源"), value: Binding(get: { state.translationEngine.rawValue }, set: { if let engine = TranslationEngine(rawValue: $0) { state.setTranslationEngine(engine) } }), options: TranslationEngine.allCases.map(\.rawValue))
-                    LabeledField(title: state.localized("翻译接口地址"), text: Binding(get: { state.translateAPIBaseURL }, set: { state.setTranslateAPIBaseURL($0) }))
-                    SecretKeyField(title: state.localized("翻译密钥"), account: KeychainStore.translateAPIKeyAccount)
-                    LabeledField(title: state.localized("AI 翻译接口地址"), text: Binding(get: { state.translateAIBaseURL }, set: { state.setTranslateAIBaseURL($0) }))
-                    LabeledField(title: state.localized("AI 翻译模型"), text: Binding(get: { state.translateAIModel }, set: { state.setTranslateAIModel($0) }))
-                    SecretKeyField(title: state.localized("AI 翻译密钥"), account: KeychainStore.translateAIKeyAccount)
-                    Text(state.localized("目标语言跟随应用语言；翻译失败时显示原文并标注未译出；接口地址为空时对应档位不可用；密钥只存钥匙串。")).font(.caption).foregroundStyle(.secondary)
-                    // Dev round 19 (T-01/T-03): listen mode needs an
-                    // audio track plus recognition authorization, and
-                    // the AI endpoint/key/model below serve both
-                    // modes — there is no second stored set.
-                    Text(state.localized("听翻需音频分轨与识别授权；无音频分轨的源不支持听翻。")).font(.caption).foregroundStyle(.secondary)
+                    if state.subtitleTranslationEnabled {
+                        // Dev round 19 (T-01): translation mode choice.
+                        // Default subtitle, so existing subtitle
+                        // translation users keep their old behaviour; the
+                        // mode only changes the translation input source.
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(state.localized("翻译模式")).font(.system(size: 18))
+                            Picker("", selection: Binding(get: { state.translationMode }, set: { state.setTranslationMode($0) })) { ForEach(TranslationMode.allCases, id: \.self) { Text(state.localizedValue($0.rawValue)).tag($0) } }.pickerStyle(.segmented).tint(state.accent)
+                            Text(translationModeCaption).font(.caption).foregroundStyle(.secondary)
+                            if state.translationMode == .listen {
+                                // Dev round 19 (T-01/T-03): listen mode
+                                // needs an audio track plus recognition
+                                // authorization.
+                                Text(state.localized("听翻需音频分轨与识别授权；无音频分轨的源不支持听翻。")).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.padding(.vertical, 8)
+                        ForEach(TranslationEngine.allCases, id: \.self) { engine in
+                            Button {
+                                state.setTranslationEngine(engine)
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(translationEngineTitle(engine)).font(.system(size: 18))
+                                        Text(translationEngineDescription(engine)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if state.translationEngine == engine {
+                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(state.accent).font(.system(size: 20))
+                                    }
+                                }.padding(.vertical, 11)
+                            }.buttonStyle(.plain)
+                                .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+                        }
+                        switch state.translationEngine {
+                        case .system:
+                            Text(state.localized("无需配置")).font(.subheadline)
+                            Text(systemEngineStatusText).font(.caption).foregroundStyle(TranslationService.systemEngineAvailable ? .secondary : .red)
+                        case .api:
+                            LabeledField(title: state.localized("翻译接口地址"), text: Binding(get: { state.translateAPIBaseURL }, set: { state.setTranslateAPIBaseURL($0) }))
+                            if state.translateAPIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(state.localized("地址为空，该档暂不可用")).font(.caption).foregroundStyle(.red)
+                            }
+                            SecretKeyField(title: state.localized("翻译密钥"), account: KeychainStore.translateAPIKeyAccount)
+                        case .ai:
+                            LabeledField(title: state.localized("AI 翻译接口地址"), text: Binding(get: { state.translateAIBaseURL }, set: { state.setTranslateAIBaseURL($0) }))
+                            if state.translateAIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(state.localized("地址为空，该档暂不可用")).font(.caption).foregroundStyle(.red)
+                            }
+                            LabeledField(title: state.localized("AI 翻译模型"), text: Binding(get: { state.translateAIModel }, set: { state.setTranslateAIModel($0) }), placeholder: state.localized("留空默认 gpt-4o-mini"))
+                            SecretKeyField(title: state.localized("AI 翻译密钥"), account: KeychainStore.translateAIKeyAccount)
+                        }
+                    }
+                    // Dev round 10 (D-02): target language follows the
+                    // app language; a failed translation shows the
+                    // original with an untranslated mark; an empty base
+                    // URL disables that source (never a silent
+                    // fallback); keys live in the Keychain only.
+                    Text("\(state.localized("目标语言跟随应用语言"))：\(state.language)").font(.caption).foregroundStyle(.secondary)
+                    Text(state.localized("翻译失败时显示原文并标注未译出；接口地址为空时对应档位不可用；密钥只存钥匙串。")).font(.caption).foregroundStyle(.secondary)
+                    // Dev round 19 (T-01/T-03): the AI endpoint/key/
+                    // model serve both modes — there is no second
+                    // stored set.
                     Text(state.localized("AI 翻译接口地址、密钥与模型同时服务于字幕翻与听翻两模式，不另设第二套存储。")).font(.caption).foregroundStyle(.secondary)
                 }
-                // Dev round 10 (D-05) + dev round 17 (R17-01): CarPlay
-                // is iOS-only; the row is an informational caption,
-                // not a switch — CarPlay activates on connection.
-                // Audio works on all versions; video needs iOS 26.4+
-                // plus a vehicle that supports video in the car,
-                // parked only (see CarPlayScene).
-                #if os(iOS)
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("字幕翻译"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    // Dev round 21 (S-03): CarPlay requirements checklist, replacing
+    // the old prose paragraph. Audio works everywhere; video needs
+    // iOS 26.4+ plus a vehicle that supports video in the car, and
+    // only while parked (see CarPlayScene).
+    #if os(iOS)
+    private var carPlayPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("CarPlay"), icon: "car") {
-                    Text(state.localized("连接车机后，车机上会出现频道列表并可播放音频（全版本可用）；视频需 iOS 26.4 及以上、支持车载视频的车机，且仅驻车时可用。")).font(.caption).foregroundStyle(.secondary)
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(state.accent)
+                        Text(state.localized("车机上可播放音频（全版本可用）")).font(.subheadline)
+                    }.padding(.vertical, 8).overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+                    HStack(alignment: .top, spacing: 10) {
+                        if #available(iOS 26.4, *) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(state.accent)
+                            Text(state.localized("视频可用")).font(.subheadline)
+                        } else {
+                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                            Text(state.localized("视频需 iOS 26.4 及以上，还需支持车载视频的车机")).font(.subheadline)
+                        }
+                    }.padding(.vertical, 8).overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                        Text(state.localized("视频仅驻车时可用")).font(.subheadline)
+                    }.padding(.vertical, 8)
                 }
-                #endif
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("CarPlay"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+    #endif
+
+    private var networkPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("网络"), icon: "globe.americas") {
                     LabeledField(title: "User-Agent", text: $userAgent)
                     Text(state.localized("留空时使用内置标识；用于 M3U/EPG 请求与两路播放（KSPlayer 与系统播放器）。")).font(.caption).foregroundStyle(.secondary)
@@ -431,11 +682,31 @@ struct SettingsView: View {
                         Text(state.localized("清除全部仅删除已存入钥匙串的密码，若字段中仍带有密码，离场确认时仍会重新存入。")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("网络"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var bufferPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("缓冲区"), icon: "memorychip") {
                     HStack { Text(state.localized("网络缓存大小")).font(.system(size: 18)); Spacer(); Text("\(Int(state.networkBufferMilliseconds)) ms").font(.system(size: 18, design: .monospaced)).foregroundStyle(state.accent) }
                     Slider(value: Binding(get: { state.networkBufferMilliseconds }, set: { state.setBuffer($0) }), in: 500...10000, step: 250).tint(state.accent)
                     Text(state.localized("网络连接较慢或不稳定时，可增加缓存")).font(.caption).foregroundStyle(.secondary)
                 }
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("缓冲区"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var dataCachePage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("数据与缓存"), icon: "externaldrive") {
                     // Dev round 6 (R6-10): real cache usage (URLCache
                     // memory + disk plus the guide cache file). Zero
@@ -465,6 +736,16 @@ struct SettingsView: View {
                     Button(state.localized("清除"), role: .destructive) { state.clearFavorites() }
                     Button(state.localized("关闭"), role: .cancel) {}
                 } message: { Text(state.localized("确定清除全部收藏吗？该操作无法撤销。")) }
+            }.padding(.bottom, 40)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("数据与缓存"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var epgPage: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 14) {
                 SettingsSection(title: state.localized("EPG节目单"), icon: "list.bullet.rectangle.portrait") {
                     LabeledField(title: state.localized("EPG地址"), text: Binding(get: { state.epgDraftURL }, set: { state.setEPGURL($0) }), placeholder: "https://example.com/guide.xml")
                     HStack(spacing: 10) {
@@ -516,9 +797,33 @@ struct SettingsView: View {
                     }
                     if let epgError = state.epgError { Text(epgError).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true).padding(.top, 4) }
                 }
-                Text(state.localized("NanoStream 是一个媒体播放器外壳。请仅添加您有权观看的播放列表和视频流。")).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading).padding(.horizontal, 22).padding(.bottom, 120)
-            }
+            }.padding(.bottom, 40)
         }
+        .background(Color.appBackground)
+        .navigationTitle(state.localized("EPG节目单"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Dev round 21 (S-02): one hub row — icon, title, one-line live
+/// status summary, chevron. Same row language as ActionRow, plus the
+/// summary line under the title.
+private struct SettingsHubRow: View {
+    @EnvironmentObject private var state: AppState
+    let title: String
+    let icon: String
+    let summary: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(state.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 18))
+                Text(summary).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right").foregroundStyle(.secondary)
+        }.padding(.vertical, 11).overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.1)).frame(height: 1) }
     }
 }
 
