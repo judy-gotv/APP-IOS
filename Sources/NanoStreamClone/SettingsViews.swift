@@ -382,7 +382,7 @@ struct SettingsView: View {
                         switch state.translationEngine {
                         case .system:
                             Text(state.localized("无需配置")).font(.subheadline)
-                            Text(systemEngineStatusText).font(.caption).foregroundStyle(TranslationService.systemEngineAvailable ? .secondary : .red)
+                            Text(systemEngineStatusText).font(.caption).foregroundStyle(TranslationService.systemEngineAvailable ? Color.secondary : Color.red)
                         case .api:
                             LabeledField(title: state.localized("翻译接口地址"), text: Binding(get: { state.translateAPIBaseURL }, set: { state.setTranslateAPIBaseURL($0) }))
                             if state.translateAPIBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

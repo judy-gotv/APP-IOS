@@ -747,7 +747,7 @@ final class AppState: ObservableObject {
 
     // Dev round 6 (R6-07): preview concurrency clamp. A stored 0 (key
     // never set) means the default 2 (round 21, was 4).
-    static func clampedPreviewLimit(_ value: Int) -> Int {
+    nonisolated static func clampedPreviewLimit(_ value: Int) -> Int {
         // Dev round 21 (C-01): unset (0) or invalid falls back to 2,
         // not 4 — fewer concurrent decodes at submit time.
         guard value > 0 else { return 2 }
@@ -2341,14 +2341,14 @@ final class AppState: ObservableObject {
                 }
                 return
             }
-            await MainActor.run {
-                guard playlistGeneration == startGeneration else { completion(false); return }
+            let shouldPersist: Bool = await MainActor.run {
+                guard playlistGeneration == startGeneration else { completion(false); return false }
                 // Round-4 fix (C03): deleting a NON-active playlist does
                 // not bump the generation, so the two branches below used
                 // to write a global error for a playlist that no longer
                 // exists, polluting the current playlist's error bar.
                 // Deleted mid-load: just report failure, no global error.
-                guard playlists.contains(where: { $0.id == playlist.id }) else { completion(false); return }
+                guard playlists.contains(where: { $0.id == playlist.id }) else { completion(false); return false }
                 guard !loaded.channels.isEmpty else {
                     // Round-6 fix (C02): the old code returned without
                     // touching the loading flags here (and in the two
@@ -2362,7 +2362,7 @@ final class AppState: ObservableObject {
                     isRefreshingPlaylist = false
                     playlistError = localizedError(PlaylistLoadError.empty)
                     completion(false)
-                    return
+                    return false
                 }
                 // Round-2 fix: never write through a stale index captured
                 // before the await. A delete, insert or reorder during the
@@ -2378,7 +2378,7 @@ final class AppState: ObservableObject {
                     isRefreshingPlaylist = false
                     playlistError = localized("播放列表添加失败。")
                     completion(false)
-                    return
+                    return false
                 }
                 // Round-3 fix (C14): persist the new credential BEFORE
                 // committing the playlist, with read-back verification.
@@ -2396,7 +2396,7 @@ final class AppState: ObservableObject {
                         isRefreshingPlaylist = false
                         playlistError = localized("保存失败，数据未写入。")
                         completion(false)
-                        return
+                        return false
                     }
                 }
                 var committed = playlist
@@ -2429,15 +2429,25 @@ final class AppState: ObservableObject {
                     isRefreshingPlaylist = false
                 }
                 playlistError = nil
-                // Round-4 fix (C04): save() used to be fire-and-forget
-                // here, so a save failure after the Keychain write left
-                // the new password in Keychain against the OLD persisted
-                // playlist. On failure, restore the previous Keychain
-                // password so the next launch is self-consistent (old
-                // persisted playlist + old password); the in-memory state
-                // stays new for this session, which is the residual gap.
-                // Dev round 21 rework (R-02): awaited, see removeFavorites.
-                let saved = await save().value
+                // Dev compile-fix round 4 (K-01): MainActor.run takes
+                // only a synchronous closure under this toolchain, so
+                // the commit block returns whether the edit committed
+                // and the awaited save runs after it; the Task already
+                // runs on the MainActor (updatePlaylist is @MainActor),
+                // so commit -> save -> rollback order is unchanged.
+                return true
+            }
+            guard shouldPersist else { return }
+            // Round-4 fix (C04): save() used to be fire-and-forget
+            // here, so a save failure after the Keychain write left
+            // the new password in Keychain against the OLD persisted
+            // playlist. On failure, restore the previous Keychain
+            // password so the next launch is self-consistent (old
+            // persisted playlist + old password); the in-memory state
+            // stays new for this session, which is the residual gap.
+            // Dev round 21 rework (R-02): awaited, see removeFavorites.
+            let saved = await save().value
+            await MainActor.run {
                 if !saved {
                     if (playlist.kind == .xtream || playlist.kind == .tvHeadend), !playlist.password.isEmpty {
                         if candidatePassword.isEmpty { KeychainStore.deletePassword(for: playlist.id) }

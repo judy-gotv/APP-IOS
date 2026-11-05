@@ -391,7 +391,7 @@ private final class PreviewScrollGate: ObservableObject {
     func noteScrollActivity() {
         if isIdle { isIdle = false }
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { [weak self] in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { [weak self] _ in
             self?.isIdle = true
         }
     }
